@@ -60,57 +60,71 @@ def recent_5_for_each_category_album(user: sql.User, artist_id: str) -> list[str
     return albums
     
 
-async def new_releases():
-    for user in sql.iterate_users_one_by_one():
-        token_info = OAuth2.refresh_access_token(user.refresh_token)
-        
-        access_token = token_info['access_token']
-        user.access_token = access_token
-        
-        artists = get_all_artists(user)
-        artists_ids = [(artist['id'], artist['name']) for artist in artists]
+async def new_releases(user: sql.User) -> str:
+    token_info = OAuth2.refresh_access_token(user.refresh_token)
+    
+    access_token = token_info['access_token']
+    user.access_token = access_token
+    
+    artists = get_all_artists(user)
+    artists_ids = [(artist['id'], artist['name']) for artist in artists]
 
-        new_releases = {}
-        for artist_id, artist_name in artists_ids:
-            albums = recent_5_for_each_category_album(user, artist_id)
-            new_songs = {}
-            for album in albums:
-                current_time = datetime.now().strftime("%Y-%m-%d")
-                
-                if album['release_date'] == current_time:
-                    new_songs[album['id']] = album
+    new_releases = {}
+    for artist_id, artist_name in artists_ids:
+        albums = recent_5_for_each_category_album(user, artist_id)
+        new_songs = {}
+        for album in albums:
+            current_time = datetime.now().strftime("%Y-%m-%d")
             
-            if new_songs:
-                new_releases[artist_name] = new_songs
-        await new_releases_loop(user.discord_username, new_releases)
+            if album['release_date'] == current_time:
+                new_songs[album['id']] = album
+        
+        if new_songs:
+            new_releases[artist_name] = new_songs
+    str = ""
+    
+    if len(new_releases) > 0:
+        str += f"New Releases! {datetime.now().strftime("%m/%d")}\n\n"
+    
+        for artist, songs in new_releases.items():
+            str += f"**{artist}**\n"
+            for song in songs.values():
+                str += f"* [{song['name']}]({song['external_urls']['spotify']})\n"
+            str += "\n"
+    else:
+        str += f"No new releases today! {datetime.now().strftime("%m/%d")}\n\n"
+
+    return str
 
 
 @bot.event
 async def on_ready():
-    await new_releases()
-    print("Done")
+    print("Starting the day loop")
+    for user in sql.iterate_users_one_by_one():
+        print(user)
+        await send_message(user, "Finding new releases for the day")
+        str = await new_releases(user)
+        await send_message(user, str)
+    print("Finished the day loop")
     await bot.close()
     
-@bot.event            
-async def new_releases_loop(username: str, new_releases: dict[str, Any]):
-    print("new_releases_loop")
-    for client in bot.guilds:
-        for member in client.members:
-            if member.name == username:
-                str = ""
-                
-                if len(new_releases) > 0:
-                    str += f"New Releases! {datetime.now().strftime("%m/%d")}\n\n"
-                
-                    for artist, songs in new_releases.items():
-                        str += f"**{artist}**\n"
-                        for song in songs.values():
-                            str += f"* [{song['name']}]({song['external_urls']['spotify']})\n"
-                        str += "\n"
-                else:
-                    str += f"No new releases today! {datetime.now().strftime("%m/%d")}\n\n"
-                    
-                await member.send(str)
-                break
+@bot.event
+async def send_message(user: sql.User, message: str):
+    if user.discord_id:
+        try:
+            discord_user = await bot.fetch_user(user.discord_id)
+            await discord_user.send(message)
+        except discord.NotFound:
+            print(f"User with ID {user.discord_id} not found")
+        except discord.Forbidden:
+            print(f"Cannot send message to user {user.discord_id} (DMs closed)")
+        except Exception as e:
+            print(f"Error sending message to user {user.discord_id}: {e}")
+    else:
+        for client in bot.guilds:
+            for member in client.members:
+                if member.name == user.discord_username:
+                    sql.update_user_discord_id(user, member.id)
+                    await member.send(message)
 
 bot.run(discord_token)
