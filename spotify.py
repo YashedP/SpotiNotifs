@@ -78,6 +78,7 @@ async def new_releases():
 async def on_ready():
     await new_releases()
     print("Done")
+    await bot.close()
     
 @bot.event            
 async def new_releases_loop(username: str, new_releases: dict[str, Any]):
