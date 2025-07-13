@@ -7,6 +7,7 @@ import discord
 from dotenv import load_dotenv
 import os
 import time
+import asyncio
 
 load_dotenv()
 
@@ -100,13 +101,26 @@ async def new_releases(user: sql.User) -> str:
 @bot.event
 async def on_ready():
     print("Starting the day loop")
+    semaphore = asyncio.Semaphore(5)
+
+    tasks = []
     for user in sql.iterate_users_one_by_one():
-        print(user)
-        await send_message(user, "Finding new releases for the day")
-        str = await new_releases(user)
-        await send_message(user, str)
+        print("Starting task for user", user.username)
+        task = asyncio.create_task(process_user_with_semaphore(user, semaphore))
+        tasks.append(task)
+
+    await asyncio.gather(*tasks)
     print("Finished the day loop")
     await bot.close()
+
+async def process_user_with_semaphore(user: sql.User, semaphore: asyncio.Semaphore):
+    async with semaphore:
+        await process_user(user)
+
+async def process_user(user: sql.User):
+    await send_message(user, "Finding new releases for the day")
+    str = await new_releases(user)
+    await send_message(user, str)
     
 @bot.event
 async def send_message(user: sql.User, message: str):
