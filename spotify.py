@@ -12,14 +12,14 @@ import asyncio
 
 load_dotenv()
 
-discord_token = os.getenv("discord_token")
+DISCORD_TOKEN = os.getenv("discord_token")
 bot = discord.Client(intents=discord.Intents.all())
 
-following_artists_url = "https://api.spotify.com/v1/me/following"
-artist_albums_url = "https://api.spotify.com/v1/artists/{artist_id}/albums"
+FOLLOWING_ARTISTS_URL = "https://api.spotify.com/v1/me/following"
+ARTIST_ALBUMS_URL = "https://api.spotify.com/v1/artists/{artist_id}/albums"
 
-owner_discord_username = os.getenv("owner_discord_username")
-spotify_semaphore = asyncio.Semaphore(1)
+OWNER_DISCORD_USERNAME = os.getenv("owner_discord_username")
+SPOTIFY_SEMAPHORE = asyncio.Semaphore(1)
 
 sql.init_db()
 
@@ -69,7 +69,7 @@ def get_all_artists(user: sql.User) -> list[dict]:
     
     while True:
         try:
-            response = spotify_request_sync(user, following_artists_url, {
+            response = spotify_request_sync(user, FOLLOWING_ARTISTS_URL, {
             "type": "artist",
             "limit": "50",
             "after": next
@@ -78,7 +78,7 @@ def get_all_artists(user: sql.User) -> list[dict]:
             artists.extend(response['items'])
             next = response['cursors']['after']
         except requests.exceptions.RequestException as e:
-            print(f"Error requesting {following_artists_url}: {e}")
+            print(f"Error requesting {FOLLOWING_ARTISTS_URL}: {e}")
             return artists
         if not next:
             break
@@ -89,7 +89,7 @@ async def recent_5_for_each_category_album(user: sql.User, artist_id: str, sessi
     albums = []
     for category in ["album", "single", "appears_on", "compilation"]:
         async with semaphore:
-            response = await spotify_request(user, artist_albums_url.format(artist_id=artist_id), session, {
+            response = await spotify_request(user, ARTIST_ALBUMS_URL.format(artist_id=artist_id), session, {
             "limit": 5,
             "album_type": category,
             "market": "US"
@@ -116,7 +116,7 @@ async def new_releases(user: sql.User) -> str:
     
     async with aiohttp.ClientSession() as session:
         async def process_single_artist(artist_id, artist_name):
-            albums = await recent_5_for_each_category_album(user, artist_id, session, spotify_semaphore)
+            albums = await recent_5_for_each_category_album(user, artist_id, session, SPOTIFY_SEMAPHORE)
             
             new_songs = {}
             for album in albums:
@@ -195,8 +195,8 @@ async def send_message(user: sql.User, message: str):
 
 @bot.event
 async def error_message(error: Exception):
-    if owner_discord_username:
-        owner_user = sql.get_user_by_name(owner_discord_username)
+    if OWNER_DISCORD_USERNAME:
+        owner_user = sql.get_user_by_name(OWNER_DISCORD_USERNAME)
         await send_message(owner_user, f"Error: {error}")
 
-bot.run(discord_token)
+bot.run(DISCORD_TOKEN)
