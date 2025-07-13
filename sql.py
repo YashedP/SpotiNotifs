@@ -1,5 +1,8 @@
 from sqlite3 import connect
 from typing import Generator
+from pathlib import Path
+
+users_db = Path(__file__).resolve().parent / "users.db"
 
 class User:
     def __init__(self, user_UUID, username, discord_username, refresh_token, access_token=None):
@@ -13,21 +16,21 @@ class User:
         return f"User(user_UUID={self.user_UUID}, username={self.username}, discord_username={self.discord_username}, refresh_token={self.refresh_token}, access_token={self.access_token})"
 
 def init_db() -> None:
-    conn = connect("users.db")
+    conn = connect(users_db)
     cursor = conn.cursor()
     cursor.execute("CREATE TABLE IF NOT EXISTS users (user_UUID TEXT, username TEXT, discord_username TEXT, refresh_token TEXT)")
     conn.commit()
     conn.close()
 
 def add_user(user: User) -> None:
-    conn = connect("users.db")
+    conn = connect(users_db)
     cursor = conn.cursor()
     cursor.execute("INSERT INTO users (user_UUID, username, discord_username, refresh_token) VALUES (?, ?, ?, ?)", (user.user_UUID, user.username, user.discord_username, user.refresh_token))
     conn.commit()
     conn.close()
 
 def get_all_users() -> list[User]:
-    conn = connect("users.db")
+    conn = connect(users_db)
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users")
     users = cursor.fetchall()
@@ -35,7 +38,7 @@ def get_all_users() -> list[User]:
     return [User(user[0], user[1], user[2], user[3]) for user in users]
 
 def iterate_users_one_by_one() -> Generator[User, None, None]:
-    conn = connect("users.db")
+    conn = connect(users_db)
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users")
     
@@ -47,7 +50,7 @@ def iterate_users_one_by_one() -> Generator[User, None, None]:
         yield User(user[0], user[1], user[2], user[3])
 
 def get_user_by_uuid(user_UUID: str) -> User:
-    conn = connect("users.db")
+    conn = connect(users_db)
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM users WHERE user_UUID = ?", (user_UUID,))
     user = cursor.fetchone()
@@ -55,7 +58,7 @@ def get_user_by_uuid(user_UUID: str) -> User:
     return User(user[0], user[1], user[2], user[3])
 
 def update_user_refresh_token(user: User, refresh_token: str) -> None:
-    conn = connect("users.db")
+    conn = connect(users_db)
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET refresh_token = ? WHERE user_UUID = ?", (refresh_token, user.user_UUID))
     conn.commit()

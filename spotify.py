@@ -6,6 +6,7 @@ from datetime import datetime
 import discord
 from dotenv import load_dotenv
 import os
+import time
 
 load_dotenv()
 
@@ -18,8 +19,17 @@ artist_albums_url = "https://api.spotify.com/v1/artists/{artist_id}/albums"
 sql.init_db()
 
 def spotify_request(user: sql.User, url: str, params: dict[str, str] = {}) -> dict[str, Any]:
-    response = requests.get(url, params=params, headers={"Authorization": f"Bearer {user.access_token}"})
-    return response.json()
+    attempts = 3
+    while attempts > 0:
+        try:
+            response = requests.get(url, params=params, headers={"Authorization": f"Bearer {user.access_token}"})
+            return response.json()
+        except Exception as e:
+            print(e)
+            attempts -= 1
+            if attempts == 0:
+                raise e
+            time.sleep(1 + (3 - attempts) * 2)
 
 def get_all_artists(user: sql.User) -> list[str]:
     artists = []
@@ -69,8 +79,9 @@ async def new_releases():
                 
                 if album['release_date'] == current_time:
                     new_songs[album['id']] = album
-                
-            new_releases[artist_name] = new_songs
+            
+            if new_songs:
+                new_releases[artist_name] = new_songs
         await new_releases_loop(user.discord_username, new_releases)
 
 
