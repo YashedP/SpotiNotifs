@@ -51,25 +51,32 @@ def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] = {}) 
             response = requests.get(url, params=params, headers=headers)
             response.raise_for_status()
             return response.json()
-        except Exception as e:
+        except requests.exceptions.RequestException as e:
             print(f"Error requesting {url}: {e}")
-            attempts -= 1
-            if attempts == 0:
+            if hasattr(e, 'response') and e.response and e.response.status_code == 429:
+                print(f"Rate limited (429). Waiting {e.response.headers.get('Retry-After')} seconds before retry...")
+                time.sleep(int(e.response.headers.get('Retry-After')))
+                continue
+            else:
                 raise e
-            time.sleep(1 + (3 - attempts) * 2)
 
 def get_all_artists(user: sql.User) -> list[dict]:
     artists = []
     next = None
     
     while True:
-        response = spotify_request_sync(user, following_artists_url, {
+        try:
+            response = spotify_request_sync(user, following_artists_url, {
             "type": "artist",
             "limit": "50",
             "after": next
-        })['artists']
-        artists.extend(response['items'])
-        next = response['cursors']['after']
+            })['artists']
+            
+            artists.extend(response['items'])
+            next = response['cursors']['after']
+        except requests.exceptions.RequestException as e:
+            print(f"Error requesting {following_artists_url}: {e}")
+            return artists
         if not next:
             break
     
@@ -94,7 +101,12 @@ async def new_releases(user: sql.User) -> str:
     access_token = token_info['access_token']
     user.access_token = access_token
     
-    artists = get_all_artists(user)
+    try:
+        artists = get_all_artists(user)
+    except Exception as e:
+        await error_message(f"Error requesting artists: {e}")
+        return "Error requesting artists"
+    
     artists_ids = [(artist['id'], artist['name']) for artist in artists]
 
     new_releases = {}
@@ -102,6 +114,7 @@ async def new_releases(user: sql.User) -> str:
     async with aiohttp.ClientSession() as session:
         async def process_single_artist(artist_id, artist_name):
             albums = await recent_5_for_each_category_album(user, artist_id, session, spotify_semaphore)
+            
             new_songs = {}
             for album in albums:
                 current_time = datetime.now().strftime("%Y-%m-%d")
@@ -117,7 +130,7 @@ async def new_releases(user: sql.User) -> str:
         for result in results:
             if isinstance(result, Exception):
                 print(f"Error processing artist: {result}")
-                await error_message(result)
+                await error_message(f"Error processing artist: {result}")
                 continue
             artist_name, new_songs = result
             if new_songs:
