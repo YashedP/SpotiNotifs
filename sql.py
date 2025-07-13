@@ -71,3 +71,11 @@ def update_user_discord_id(user: User, discord_id: str) -> None:
     cursor.execute("UPDATE users SET discord_id = ? WHERE user_UUID = ?", (discord_id, user.user_UUID))
     conn.commit()
     conn.close()
+    
+def get_user_by_name(username: str) -> User:
+    conn = connect(users_db)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM users WHERE discord_username = ?", (username,))
+    user = cursor.fetchone()
+    conn.close()
+    return User(user[0], user[1], user[2], user[3], user[4])

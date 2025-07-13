@@ -1,5 +1,6 @@
 import sql
 import OAuth2
+import aiohttp
 import requests
 from typing import Any
 from datetime import datetime
@@ -17,27 +18,52 @@ bot = discord.Client(intents=discord.Intents.all())
 following_artists_url = "https://api.spotify.com/v1/me/following"
 artist_albums_url = "https://api.spotify.com/v1/artists/{artist_id}/albums"
 
+owner_discord_username = os.getenv("owner_discord_username")
+spotify_semaphore = asyncio.Semaphore(1)
+
 sql.init_db()
 
-def spotify_request(user: sql.User, url: str, params: dict[str, str] = {}) -> dict[str, Any]:
+
+async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSession, params: dict[str, str] = {}) -> dict[str, Any]:
+    headers = {"Authorization": f"Bearer {user.access_token}"}
+    attempts = 3
+    while attempts > 0:
+        if attempts != 3:
+            print(f"Attempt {3 - attempts + 1} of 3 for {url}")
+        try:
+            async with session.get(url, params=params, headers=headers) as response:
+                response.raise_for_status()
+                
+                return await response.json()
+        except aiohttp.ClientResponseError as e:
+            if e.status == 429:
+                print(f"Rate limited (429). Waiting {e.headers.get('Retry-After')} seconds before retry...")
+                await asyncio.sleep(int(e.headers.get('Retry-After')))
+                continue
+            else:
+                raise e
+
+def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] = {}) -> dict[str, Any]:
+    headers = {"Authorization": f"Bearer {user.access_token}"}
     attempts = 3
     while attempts > 0:
         try:
-            response = requests.get(url, params=params, headers={"Authorization": f"Bearer {user.access_token}"})
+            response = requests.get(url, params=params, headers=headers)
+            response.raise_for_status()
             return response.json()
         except Exception as e:
-            print(e)
+            print(f"Error requesting {url}: {e}")
             attempts -= 1
             if attempts == 0:
                 raise e
             time.sleep(1 + (3 - attempts) * 2)
 
-def get_all_artists(user: sql.User) -> list[str]:
+def get_all_artists(user: sql.User) -> list[dict]:
     artists = []
     next = None
     
     while True:
-        response = spotify_request(user, following_artists_url, {
+        response = spotify_request_sync(user, following_artists_url, {
             "type": "artist",
             "limit": "50",
             "after": next
@@ -49,10 +75,11 @@ def get_all_artists(user: sql.User) -> list[str]:
     
     return artists
 
-def recent_5_for_each_category_album(user: sql.User, artist_id: str) -> list[str]:
+async def recent_5_for_each_category_album(user: sql.User, artist_id: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore) -> list[str]:
     albums = []
     for category in ["album", "single", "appears_on", "compilation"]:
-        response = spotify_request(user, artist_albums_url.format(artist_id=artist_id), {
+        async with semaphore:
+            response = await spotify_request(user, artist_albums_url.format(artist_id=artist_id), session, {
             "limit": 5,
             "album_type": category,
             "market": "US"
@@ -71,19 +98,32 @@ async def new_releases(user: sql.User) -> str:
     artists_ids = [(artist['id'], artist['name']) for artist in artists]
 
     new_releases = {}
-    for artist_id, artist_name in artists_ids:
-        albums = recent_5_for_each_category_album(user, artist_id)
-        new_songs = {}
-        for album in albums:
-            current_time = datetime.now().strftime("%Y-%m-%d")
-            
-            if album['release_date'] == current_time:
-                new_songs[album['id']] = album
-        
-        if new_songs:
-            new_releases[artist_name] = new_songs
-    str = ""
     
+    async with aiohttp.ClientSession() as session:
+        async def process_single_artist(artist_id, artist_name):
+            albums = await recent_5_for_each_category_album(user, artist_id, session, spotify_semaphore)
+            new_songs = {}
+            for album in albums:
+                current_time = datetime.now().strftime("%Y-%m-%d")
+                
+                if album['release_date'] == current_time:
+                    new_songs[album['id']] = album
+            
+            return artist_name, new_songs if new_songs else None
+        
+        tasks = [process_single_artist(artist_id, artist_name) for artist_id, artist_name in artists_ids]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        for result in results:
+            if isinstance(result, Exception):
+                print(f"Error processing artist: {result}")
+                await error_message(result)
+                continue
+            artist_name, new_songs = result
+            if new_songs:
+                new_releases[artist_name] = new_songs
+    
+    str = ""
     if len(new_releases) > 0:
         str += f"New Releases! {datetime.now().strftime("%m/%d")}\n\n"
     
@@ -101,21 +141,17 @@ async def new_releases(user: sql.User) -> str:
 @bot.event
 async def on_ready():
     print("Starting the day loop")
-    semaphore = asyncio.Semaphore(5)
 
     tasks = []
-    for user in sql.iterate_users_one_by_one():
+    for user in sql.iterate_users_one_by_one():        
         print("Starting task for user", user.username)
-        task = asyncio.create_task(process_user_with_semaphore(user, semaphore))
-        tasks.append(task)
+        process_user(user)
+        # task = asyncio.create_task(process_user(user))
+        # tasks.append(task)
 
     await asyncio.gather(*tasks)
     print("Finished the day loop")
     await bot.close()
-
-async def process_user_with_semaphore(user: sql.User, semaphore: asyncio.Semaphore):
-    async with semaphore:
-        await process_user(user)
 
 async def process_user(user: sql.User):
     await send_message(user, "Finding new releases for the day")
@@ -140,5 +176,11 @@ async def send_message(user: sql.User, message: str):
                 if member.name == user.discord_username:
                     sql.update_user_discord_id(user, member.id)
                     await member.send(message)
+
+@bot.event
+async def error_message(error: Exception):
+    if owner_discord_username:
+        owner_user = sql.get_user_by_name(owner_discord_username)
+        await send_message(owner_user, f"Error: {error}")
 
 bot.run(discord_token)
