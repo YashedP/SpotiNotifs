@@ -37,8 +37,11 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
                 return await response.json()
         except aiohttp.ClientResponseError as e:
             if e.status == 429:
-                print(f"Rate limited (429). Waiting {e.headers.get('Retry-After')} seconds before retry...")
-                await asyncio.sleep(int(e.headers.get('Retry-After')))
+                seconds_to_wait = int(e.headers.get('Retry-After'))
+                print(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry...")
+                if seconds_to_wait > 20:
+                    await error_message(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry... for user {user}")
+                await asyncio.sleep(seconds_to_wait)
                 continue
             else:
                 raise e
@@ -158,11 +161,11 @@ async def on_ready():
     tasks = []
     for user in sql.iterate_users_one_by_one():        
         print("Starting task for user", user.username)
-        process_user(user)
+        await process_user(user)
         # task = asyncio.create_task(process_user(user))
         # tasks.append(task)
 
-    await asyncio.gather(*tasks)
+    # await asyncio.gather(*tasks)
     print("Finished the day loop")
     await bot.close()
 
