@@ -60,8 +60,6 @@ async def new_releases():
         artists = get_all_artists(user)
         artists_ids = [(artist['id'], artist['name']) for artist in artists]
 
-        artists_ids = [("63ylN6WBUUxxMsySiDmr0B", "Omoinotake")]
-
         new_releases = {}
         for artist_id, artist_name in artists_ids:
             albums = recent_5_for_each_category_album(user, artist_id)
