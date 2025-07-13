@@ -153,7 +153,11 @@ async def new_releases(user: sql.User) -> str:
 
     return str
 
-
+async def process_user(user: sql.User):
+    await send_message(user, "Finding new releases for the day")
+    str = await new_releases(user)
+    await send_message(user, str)
+    
 @bot.event
 async def on_ready():
     print("Starting the day loop")
@@ -169,11 +173,6 @@ async def on_ready():
     print("Finished the day loop")
     await bot.close()
 
-async def process_user(user: sql.User):
-    await send_message(user, "Finding new releases for the day")
-    str = await new_releases(user)
-    await send_message(user, str)
-    
 @bot.event
 async def send_message(user: sql.User, message: str):
     if user.discord_id:
