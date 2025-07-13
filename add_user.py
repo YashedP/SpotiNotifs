@@ -122,7 +122,7 @@ def callback():
     response = OAuth2.get_access_token(authCode)
     refresh_token = response['refresh_token']
     
-    sql.add_user(user_UUID, username, discord_username, refresh_token)
+    sql.add_user(sql.User(user_UUID, username, discord_username, refresh_token))
     
     return f"Successfully authenticated user: {username} with Discord: {discord_username}"
 

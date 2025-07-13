@@ -54,9 +54,9 @@ async def new_releases():
     for user in sql.iterate_users_one_by_one():
         token_info = OAuth2.refresh_access_token(user.refresh_token)
         
-        user.access_token = token_info['access_token']
-        sql.update_user_access_token(user, user.access_token)
-
+        access_token = token_info['access_token']
+        user.access_token = access_token
+        
         artists = get_all_artists(user)
         artists_ids = [(artist['id'], artist['name']) for artist in artists]
 

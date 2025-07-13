@@ -2,23 +2,27 @@ from sqlite3 import connect
 from typing import Generator
 
 class User:
-    def __init__(self, user_UUID, username, discord_username, refresh_token):
+    def __init__(self, user_UUID, username, discord_username, refresh_token, access_token=None):
         self.user_UUID = user_UUID
         self.username = username
         self.discord_username = discord_username
         self.refresh_token = refresh_token
+        self.access_token = access_token
+        
+    def __str__(self):
+        return f"User(user_UUID={self.user_UUID}, username={self.username}, discord_username={self.discord_username}, refresh_token={self.refresh_token}, access_token={self.access_token})"
 
 def init_db() -> None:
     conn = connect("users.db")
     cursor = conn.cursor()
-    cursor.execute("CREATE TABLE IF NOT EXISTS users (user_UUID TEXT, username TEXT, discord_username TEXT, access_token TEXT, refresh_token TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS users (user_UUID TEXT, username TEXT, discord_username TEXT, refresh_token TEXT)")
     conn.commit()
     conn.close()
 
-def add_user(user_UUID: str, username: str, discord_username: str, refresh_token: str) -> None:
+def add_user(user: User) -> None:
     conn = connect("users.db")
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO users (user_UUID, username, discord_username, refresh_token) VALUES (?, ?, ?, ?)", (user_UUID, username, discord_username, refresh_token))
+    cursor.execute("INSERT INTO users (user_UUID, username, discord_username, refresh_token) VALUES (?, ?, ?, ?)", (user.user_UUID, user.username, user.discord_username, user.refresh_token))
     conn.commit()
     conn.close()
 
