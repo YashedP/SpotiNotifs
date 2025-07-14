@@ -17,6 +17,10 @@ bot = discord.Client(intents=discord.Intents.all())
 
 FOLLOWING_ARTISTS_URL = "https://api.spotify.com/v1/me/following"
 ARTIST_ALBUMS_URL = "https://api.spotify.com/v1/artists/{artist_id}/albums"
+ME_URL = "https://api.spotify.com/v1/me"
+ALBUM_URL = "https://api.spotify.com/v1/albums/{album_id}"
+CREATE_PLAYLIST_URL = "https://api.spotify.com/v1/users/{user_id}/playlists"
+ADD_TO_PLAYLIST_URL = "https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
 
 OWNER_DISCORD_USERNAME = os.getenv("owner_discord_username")
 SPOTIFY_SEMAPHORE = asyncio.Semaphore(1)
@@ -46,12 +50,17 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
             else:
                 raise e
 
-def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] = {}) -> dict[str, Any]:
+def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] = {}, body: dict[str, Any] = {}, method: str = "GET") -> dict[str, Any]:
     headers = {"Authorization": f"Bearer {user.access_token}"}
     attempts = 3
     while attempts > 0:
         try:
-            response = requests.get(url, params=params, headers=headers)
+            if method == "GET":
+                response = requests.get(url, params=params, headers=headers)
+            elif method == "POST":
+                response = requests.post(url, params=params, headers=headers, json=body)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
@@ -97,6 +106,53 @@ async def recent_5_for_each_category_album(user: sql.User, artist_id: str, sessi
         albums.extend(response['items'])
     return albums
     
+async def create_playlist(user: sql.User) -> str:
+    try:
+        response = spotify_request_sync(user, ME_URL)
+        id = response['id']
+        
+        body = {
+            "name": "SpotiNotif",
+            "description": "New Releases from your followed artists",
+            "public": False
+        }
+        
+        response = spotify_request_sync(user, CREATE_PLAYLIST_URL.format(user_id=id), body=body, method="POST")
+        playlist_id = response['id']
+        return playlist_id
+    except Exception as e:
+        await error_message(f"Error creating playlist: {e}")
+        return None
+
+async def add_to_playlist(user: sql.User, new_releases) -> None:
+    if not user.playlist_id:
+        return 
+    
+    uris = []
+    try:
+        for _, songs in new_releases.items():
+            for song in songs.values():
+                link = song['id']
+                response = spotify_request_sync(user, ALBUM_URL.format(album_id=link))
+                
+                items = response['tracks']['items']
+                next = response['tracks']['next']
+                while True:
+                    if next:
+                        response = spotify_request_sync(user, next)
+                        items.extend(response['items'])
+                        next = response['next']
+                    else:
+                        break
+                uris.extend([item['uri'] for item in items])
+        
+        body = {
+            "uris": uris
+        }
+        
+        spotify_request_sync(user, ADD_TO_PLAYLIST_URL.format(playlist_id=user.playlist_id), body=body, method="POST")
+    except Exception as e:
+        await error_message(f"Error adding to playlist: {e}")
 
 async def new_releases(user: sql.User) -> str:
     token_info = OAuth2.refresh_access_token(user.refresh_token)
@@ -148,6 +204,8 @@ async def new_releases(user: sql.User) -> str:
             for song in songs.values():
                 str += f"* [{song['name']}]({song['external_urls']['spotify']})\n"
             str += "\n"
+        
+        await add_to_playlist(user, new_releases)
     else:
         str += f"No new releases today! {datetime.now().strftime("%m/%d")}\n\n"
 
@@ -195,7 +253,11 @@ async def send_message(user: sql.User, message: str):
 @bot.event
 async def error_message(error: Exception):
     if OWNER_DISCORD_USERNAME:
-        owner_user = sql.get_user_by_name(OWNER_DISCORD_USERNAME)
-        await send_message(owner_user, f"Error: {error}")
+        try:
+            owner_user = sql.get_user_by_name(OWNER_DISCORD_USERNAME)
+            await send_message(owner_user, f"Error: {error}")
+        except Exception as e:
+            print(f"Error getting owner user: {e}")
 
-bot.run(DISCORD_TOKEN)
+if __name__ == "__main__":
+    bot.run(DISCORD_TOKEN)

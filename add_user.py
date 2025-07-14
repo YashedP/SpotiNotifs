@@ -3,6 +3,8 @@ from flask import Flask, redirect, request
 import uuid
 import sql
 import OAuth2
+import spotify
+import asyncio
 
 app = Flask(__name__)
 load_dotenv()
@@ -82,6 +84,10 @@ def index():
                     <label for="discord_username">Enter your Discord username:</label>
                     <input type="text" id="discord_username" name="discord_username" required placeholder="Your Discord username">
                 </div>
+                <div class="form-group">
+                    <label for="want_playlist">Automatically create a playlist for all newly released songs from your followed artists</label>
+                    <input type="checkbox" id="want_playlist" name="want_playlist" required>
+                </div>
                 <button type="submit">Continue to Spotify</button>
             </form>
         </div>
@@ -93,11 +99,17 @@ def index():
 def auth():
     username = request.form.get('username')
     discord_username = request.form.get('discord_username')
+    want_playlist = request.form.get('want_playlist')
     if not username or not discord_username:
         return redirect('/')
     
     user_UUID = str(uuid.uuid4())
-    users[user_UUID] = {'username': username, 'discord_username': discord_username.lower()}
+    users[user_UUID] = {'username': username, 'discord_username': discord_username.lower(), 'want_playlist': want_playlist}
+    
+    if want_playlist == 'on':
+        want_playlist = True
+    else:
+        want_playlist = False
 
     auth_url = OAuth2.create_authorization_url(state=user_UUID)
     return redirect(auth_url)
@@ -118,12 +130,18 @@ def callback():
     del users[user_UUID]
     username = user_data['username']
     discord_username = user_data['discord_username']
+    want_playlist = user_data['want_playlist']
     
     response = OAuth2.get_access_token(authCode)
     refresh_token = response['refresh_token']
     
-    sql.add_user(sql.User(user_UUID, username, discord_username, refresh_token))
+    user = sql.User(user_UUID, username, discord_username, refresh_token)
+    if want_playlist:
+        user.access_token = OAuth2.refresh_access_token(refresh_token)['access_token']
+        playlist_id = asyncio.run(spotify.create_playlist(user))
+        user.playlist_id = playlist_id
     
+    sql.add_user(user)
     return f"Successfully authenticated user: {username} with Discord: {discord_username}"
 
 if __name__ == '__main__':
