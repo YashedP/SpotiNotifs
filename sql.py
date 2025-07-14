@@ -95,6 +95,20 @@ def get_user_by_uuid(user_UUID: str) -> User:
         print(f"Error getting user by UUID: {e}")
         raise
 
+def delete_user_by_uuid(user_UUID: str) -> bool:
+    try:
+        conn = connect(USERS_DB)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM users WHERE user_UUID = ?", (user_UUID,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        if conn:
+            conn.close()
+        print(f"Error deleting user by UUID: {e}")
+        raise
+
 def update_user_refresh_token(user: User, refresh_token: str) -> None:
     try:
         conn = connect(USERS_DB)
