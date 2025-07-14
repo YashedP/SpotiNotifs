@@ -23,7 +23,6 @@ ARTIST_ALBUMS_URL = "https://api.spotify.com/v1/artists/{artist_id}/albums"
 ME_URL = "https://api.spotify.com/v1/me"
 ALBUM_URL = "https://api.spotify.com/v1/albums/{album_id}"
 CREATE_PLAYLIST_URL = "https://api.spotify.com/v1/users/{user_id}/playlists"
-GET_PLAYLIST_URL = "https://api.spotify.com/v1/playlists/{playlist_id}"
 ADD_TO_PLAYLIST_URL = "https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
 
 sql.init_db()
@@ -108,37 +107,26 @@ async def recent_5_for_each_category_album(user: sql.User, artist_id: str, sessi
     return albums
     
 async def create_playlist(user: sql.User) -> str:
-    response = spotify_request_sync(user, ME_URL)
-    id = response['id']
-    
-    body = {
-        "name": "SpotiNotif",
-        "description": "New Releases from your followed artists",
-        "public": False
-    }
-    
-    response = spotify_request_sync(user, CREATE_PLAYLIST_URL.format(user_id=id), body=body, method="POST")
-    playlist_id = response['id']
-    return playlist_id
+    try:
+        response = spotify_request_sync(user, ME_URL)
+        id = response['id']
+        
+        body = {
+            "name": "SpotiNotif",
+            "description": "New Releases from your followed artists",
+            "public": False
+        }
+        
+        response = spotify_request_sync(user, CREATE_PLAYLIST_URL.format(user_id=id), body=body, method="POST")
+        playlist_id = response['id']
+        return playlist_id
+    except Exception as e:
+        await error_message(f"Error creating playlist: {e}")
+        return None
 
 async def add_to_playlist(user: sql.User, new_releases) -> None:
     if not user.playlist_id:
         return 
-    
-    try:
-        spotify_request_sync(user, GET_PLAYLIST_URL.format(playlist_id=user.playlist_id))
-    except requests.exceptions.RequestException as e:
-        if e.response.status_code == 404:
-            await send_message(user, "Playlist not found, creating a new one...")
-            try:
-                user.playlist_id = await create_playlist(user)
-                await send_message(user, "Playlist created")
-            except Exception as e:
-                await error_message(f"Error creating playlist: {e}")
-                return
-        else:
-            await error_message(f"Error getting playlist: {e}")
-            return
     
     uris = []
     try:
