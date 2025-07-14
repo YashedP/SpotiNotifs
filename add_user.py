@@ -141,8 +141,10 @@ def callback():
         playlist_id = asyncio.run(spotify.create_playlist(user))
         user.playlist_id = playlist_id
     
-    sql.add_user(user)
-    return f"Successfully authenticated user: {username} with Discord: {discord_username}"
+    if sql.add_user(user):
+        return f"Successfully authenticated user: {username} with Discord: {discord_username}"
+    else:
+        return f"User {username} already exists"
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

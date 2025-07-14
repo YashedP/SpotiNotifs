@@ -33,12 +33,18 @@ def init_db() -> None:
         print(f"Error initializing database: {e}")
         raise
 
-def add_user(user: User) -> None:
+def add_user(user: User) -> bool:
     try:
         conn = connect(USERS_DB)
         cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE username = ?", (user.username,))
+        if cursor.fetchone():
+            print(f"User {user.username} already exists")
+            return False
         cursor.execute("INSERT INTO users (user_UUID, username, discord_username, refresh_token, playlist_id, discord_id) VALUES (?, ?, ?, ?, ?, ?)", (user.user_UUID, user.username, user.discord_username, user.refresh_token, user.playlist_id, user.discord_id))
         conn.commit()
+        conn.close()
+        return True
     except Exception as e:
         if conn:
             conn.close()
