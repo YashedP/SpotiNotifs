@@ -232,7 +232,10 @@ async def send_message(user: sql.User, message: str):
         for client in bot.guilds:
             for member in client.members:
                 if member.name == user.discord_username:
-                    sql.update_user_discord_id(user, member.id)
+                    try:
+                        sql.update_user_discord_id(user, member.id)
+                    except Exception as e:
+                        await error_message(f"Error updating user discord ID: {e}")
                     await member.send(message)
 
 @bot.event
