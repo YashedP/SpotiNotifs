@@ -17,6 +17,9 @@ class User:
     def __str__(self):
         return f"User(user_UUID={self.user_UUID}, username={self.username}, discord_username={self.discord_username}, refresh_token={self.refresh_token}, access_token={self.access_token}, discord_id={self.discord_id}, playlist_id={self.playlist_id})"
 
+    def safe_str(self):
+        return f"User(user_UUID={self.user_UUID}, username={self.username}, discord_username={self.discord_username}, discord_id={self.discord_id}, playlist_id={self.playlist_id})"
+
 def init_db() -> None:
     conn = connect(USERS_DB)
     cursor = conn.cursor()

@@ -15,6 +15,8 @@ load_dotenv()
 
 DISCORD_TOKEN = os.getenv("discord_token")
 bot = discord.Client(intents=discord.Intents.all())
+OWNER_DISCORD_USERNAME = os.getenv("owner_discord_username")
+SPOTIFY_SEMAPHORE = asyncio.Semaphore(1)
 
 FOLLOWING_ARTISTS_URL = "https://api.spotify.com/v1/me/following"
 ARTIST_ALBUMS_URL = "https://api.spotify.com/v1/artists/{artist_id}/albums"
@@ -23,11 +25,7 @@ ALBUM_URL = "https://api.spotify.com/v1/albums/{album_id}"
 CREATE_PLAYLIST_URL = "https://api.spotify.com/v1/users/{user_id}/playlists"
 ADD_TO_PLAYLIST_URL = "https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
 
-OWNER_DISCORD_USERNAME = os.getenv("owner_discord_username")
-SPOTIFY_SEMAPHORE = asyncio.Semaphore(1)
-
 sql.init_db()
-
 
 async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSession, params: dict[str, str] = {}) -> dict[str, Any]:
     headers = {"Authorization": f"Bearer {user.access_token}"}
@@ -45,7 +43,7 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
                 seconds_to_wait = int(e.headers.get('Retry-After'))
                 print(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry...")
                 if seconds_to_wait > 20:
-                    await error_message(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry... for user {user}")
+                    await error_message(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry... for user {user.safe_str()}")
                     sys.exit(1)
                 await asyncio.sleep(seconds_to_wait)
                 continue
@@ -219,21 +217,6 @@ async def process_user(user: sql.User):
     await send_message(user, str)
     
 @bot.event
-async def on_ready():
-    print("Starting the day loop")
-
-    tasks = []
-    for user in sql.iterate_users_one_by_one():        
-        print("Starting task for user", user.username)
-        await process_user(user)
-        # task = asyncio.create_task(process_user(user))
-        # tasks.append(task)
-
-    # await asyncio.gather(*tasks)
-    print("Finished the day loop")
-    await bot.close()
-
-@bot.event
 async def send_message(user: sql.User, message: str):
     if user.discord_id:
         try:
@@ -260,6 +243,40 @@ async def error_message(error: Exception):
             await send_message(owner_user, f"Error: {error}")
         except Exception as e:
             print(f"Error getting owner user: {e}")
+
+@bot.event
+async def on_ready():
+    print("Starting the day loop")
+
+    tasks = []
+    for user in sql.iterate_users_one_by_one():        
+        print("Starting task for user", user.username)
+        await process_user(user)
+        # task = asyncio.create_task(process_user(user))
+        # tasks.append(task)
+
+    # await asyncio.gather(*tasks)
+    print("Finished the day loop")
+    await bot.close()
+
+@bot.event
+async def delete_messages():
+    for client in bot.guilds:
+        for member in client.members:
+            if member.name == OWNER_DISCORD_USERNAME:
+                OWNER_DISCORD_ID = member.id
+                break
+
+    try:
+        user = await bot.fetch_user(OWNER_DISCORD_ID)
+        channel = await user.create_dm()
+
+        async for message in channel.history(limit=100):
+            if message.author == bot.user:
+                await message.delete()
+    except Exception as e:
+        print(f"Error in on_ready: {e}")
+        await bot.close()
 
 if __name__ == "__main__":
     bot.run(DISCORD_TOKEN)
