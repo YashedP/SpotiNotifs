@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 import os
 import time
 import asyncio
+import sys
 
 load_dotenv()
 
@@ -45,6 +46,7 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
                 print(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry...")
                 if seconds_to_wait > 20:
                     await error_message(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry... for user {user}")
+                    sys.exit(1)
                 await asyncio.sleep(seconds_to_wait)
                 continue
             else:
