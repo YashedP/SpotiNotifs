@@ -124,7 +124,7 @@ def callback():
         return f"Error: {error}"
     
     if user_UUID not in users:
-        return f"User not found"
+        return f"User not found, please try again"
     
     user_data = users[user_UUID]
     del users[user_UUID]
@@ -138,8 +138,11 @@ def callback():
     user = sql.User(user_UUID, username, discord_username, refresh_token)
     if want_playlist:
         user.access_token = OAuth2.refresh_access_token(refresh_token)['access_token']
-        playlist_id = asyncio.run(spotify.create_playlist(user))
-        user.playlist_id = playlist_id
+        try:
+            playlist_id = asyncio.run(spotify.create_playlist(user))
+            user.playlist_id = playlist_id
+        except Exception as e:
+            return f"Error creating playlist, please try again"
     
     if sql.add_user(user):
         return f"Successfully authenticated user: {username} with Discord: {discord_username}"
