@@ -21,6 +21,8 @@ SPOTIFY_SEMAPHORE = asyncio.Semaphore(1)
 FOLLOWING_ARTISTS_URL = "https://api.spotify.com/v1/me/following"
 ARTIST_ALBUMS_URL = "https://api.spotify.com/v1/artists/{artist_id}/albums"
 ME_URL = "https://api.spotify.com/v1/me"
+ME_PLAYLISTS_URL = "https://api.spotify.com/v1/me/playlists"
+ME_FOLLOW_PLAYLIST_URL = "https://api.spotify.com/v1/playlists/{playlist_id}/followers"
 ALBUM_URL = "https://api.spotify.com/v1/albums/{album_id}"
 CREATE_PLAYLIST_URL = "https://api.spotify.com/v1/users/{user_id}/playlists"
 GET_PLAYLIST_URL = "https://api.spotify.com/v1/playlists/{playlist_id}"
@@ -106,7 +108,24 @@ async def recent_5_for_each_category_album(user: sql.User, artist_id: str, sessi
         })
         albums.extend(response['items'])
     return albums
-    
+
+async def check_playlist_exists(user: sql.User) -> bool:
+    items = []
+    next = None
+    link = ME_PLAYLISTS_URL
+    while True:
+        response = spotify_request_sync(user, link, params={"limit": 50})
+        items.extend(response['items'])
+        next = response['next']
+        link = next
+        if not next:
+            break
+
+    for item in items:
+        if item['id'] == user.playlist_id:
+            return True
+    return False
+
 async def create_playlist(user: sql.User) -> str:
     response = spotify_request_sync(user, ME_URL)
     id = response['id']
@@ -114,7 +133,7 @@ async def create_playlist(user: sql.User) -> str:
     body = {
         "name": "SpotiNotif",
         "description": "New Releases from your followed artists",
-        "public": False
+        "public": True
     }
     
     response = spotify_request_sync(user, CREATE_PLAYLIST_URL.format(user_id=id), body=body, method="POST")
@@ -125,20 +144,9 @@ async def add_to_playlist(user: sql.User, new_releases) -> None:
     if not user.playlist_id:
         return 
     
-    try:
-        spotify_request_sync(user, GET_PLAYLIST_URL.format(playlist_id=user.playlist_id))
-    except requests.exceptions.RequestException as e:
-        if e.response.status_code == 404:
-            await send_message(user, "Playlist not found, creating a new one...")
-            try:
-                user.playlist_id = await create_playlist(user)
-                await send_message(user, "Playlist created")
-            except Exception as e:
-                await error_message(f"Error creating playlist: {e}")
-                return
-        else:
-            await error_message(f"Error getting playlist: {e}")
-            return
+    if not await check_playlist_exists(user):
+        user.playlist_id = await create_playlist(user)
+        sql.update_user_playlist_id(user, user.playlist_id)
     
     uris = []
     try:
@@ -254,7 +262,7 @@ async def send_message(user: sql.User, message: str):
 async def error_message(error: Exception):
     if OWNER_DISCORD_USERNAME:
         try:
-            owner_user = sql.get_user_by_name(OWNER_DISCORD_USERNAME)
+            owner_user = sql.get_user_by_discord_username(OWNER_DISCORD_USERNAME)
             await send_message(owner_user, f"Error: {error}")
         except Exception as e:
             print(f"Error getting owner user: {e}")
@@ -263,7 +271,7 @@ async def error_message(error: Exception):
 async def on_ready():
     print("Starting the day loop")
 
-    tasks = []
+    # tasks = []
     for user in sql.iterate_users_one_by_one():        
         print("Starting task for user", user.username)
         await process_user(user)
