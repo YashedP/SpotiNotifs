@@ -18,15 +18,15 @@ bot = discord.Client(intents=discord.Intents.all())
 OWNER_DISCORD_USERNAME = os.getenv("owner_discord_username")
 SPOTIFY_SEMAPHORE = asyncio.Semaphore(1)
 
-FOLLOWING_ARTISTS_URL = "https://api.spotify.com/v1/me/following"
-ARTIST_ALBUMS_URL = "https://api.spotify.com/v1/artists/{artist_id}/albums"
-ME_URL = "https://api.spotify.com/v1/me"
-ME_PLAYLISTS_URL = "https://api.spotify.com/v1/me/playlists"
+FOLLOWING_ARTISTS_URL  = "https://api.spotify.com/v1/me/following"
+ARTIST_ALBUMS_URL      = "https://api.spotify.com/v1/artists/{artist_id}/albums"
+ME_URL                 = "https://api.spotify.com/v1/me"
+ME_PLAYLISTS_URL       = "https://api.spotify.com/v1/me/playlists"
 ME_FOLLOW_PLAYLIST_URL = "https://api.spotify.com/v1/playlists/{playlist_id}/followers"
-ALBUM_URL = "https://api.spotify.com/v1/albums/{album_id}"
-CREATE_PLAYLIST_URL = "https://api.spotify.com/v1/users/{user_id}/playlists"
-GET_PLAYLIST_URL = "https://api.spotify.com/v1/playlists/{playlist_id}"
-ADD_TO_PLAYLIST_URL = "https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
+ALBUM_URL              = "https://api.spotify.com/v1/albums/{album_id}"
+CREATE_PLAYLIST_URL    = "https://api.spotify.com/v1/users/{user_id}/playlists"
+GET_PLAYLIST_URL       = "https://api.spotify.com/v1/playlists/{playlist_id}"
+ADD_TO_PLAYLIST_URL    = "https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
 
 sql.init_db()
 
