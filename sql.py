@@ -132,12 +132,21 @@ def update_user_discord_id(user: User, discord_id: str) -> None:
             conn.close()
         print(f"Error updating user discord ID: {e}")
         raise
-    
-def get_user_by_name(username: str) -> User:
+
+def update_user_playlist_id(user: User, playlist_id: str) -> None:
     try:
         conn = connect(USERS_DB)
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE discord_username = ?", (username,))
+        cursor.execute("UPDATE users SET playlist_id = ? WHERE user_UUID = ?", (playlist_id, user.user_UUID))
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.close()
+def get_user_by_discord_username(discord_username: str) -> User:
+    try:
+        conn = connect(USERS_DB)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE discord_username = ?", (discord_username,))
         user = cursor.fetchone()
         conn.close()
         if user:
@@ -146,9 +155,25 @@ def get_user_by_name(username: str) -> User:
     except Exception as e:
         if conn:
             conn.close()
-        print(f"Error getting user by name: {e}")
+        print(f"Error getting user by discord username: {e}")
         raise
 
+def get_user_by_username(username: str) -> User:
+    try:
+        conn = connect(USERS_DB)
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+        user = cursor.fetchone()
+        conn.close()
+        if user:
+            return User(user[0], user[1], user[2], user[3], user[4], user[5])
+        return None
+    except Exception as e:
+        if conn:
+            conn.close()
+        print(f"Error getting user by username: {e}")
+        raise
+    
 def scan_users() -> None:
     try:
         conn = connect(USERS_DB)
