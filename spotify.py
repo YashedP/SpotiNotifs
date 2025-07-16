@@ -4,7 +4,7 @@ import aiohttp
 import requests
 from typing import Any
 from datetime import datetime
-import discord
+# import discord
 from dotenv import load_dotenv
 import os
 import time
@@ -14,7 +14,7 @@ import sys
 load_dotenv()
 
 DISCORD_TOKEN = os.getenv("discord_token")
-bot = discord.Client(intents=discord.Intents.all())
+# bot = discord.Client(intents=discord.Intents.all())
 OWNER_DISCORD_USERNAME = os.getenv("owner_discord_username")
 SPOTIFY_SEMAPHORE = asyncio.Semaphore(1)
 
@@ -46,7 +46,7 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
                 seconds_to_wait = int(e.headers.get('Retry-After'))
                 print(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry...")
                 if seconds_to_wait > 20:
-                    await error_message(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry... for user {user.safe_str()}")
+                    # await error_message(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry... for user {user.safe_str()}")
                     sys.exit(1)
                 await asyncio.sleep(seconds_to_wait)
                 continue
@@ -97,11 +97,10 @@ def get_all_artists(user: sql.User) -> list[dict]:
     
     return artists
 
-async def recent_5_for_each_category_album(user: sql.User, artist_id: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore) -> list[str]:
+async def recent_5_for_each_category_album(user: sql.User, artist_id: str) -> list[str]:
     albums = []
     for category in ["album", "single", "appears_on", "compilation"]:
-        async with semaphore:
-            response = await spotify_request(user, ARTIST_ALBUMS_URL.format(artist_id=artist_id), session, {
+        response = spotify_request_sync(user, ARTIST_ALBUMS_URL.format(artist_id=artist_id), {
             "limit": 5,
             "album_type": category,
             "market": "US"
@@ -172,7 +171,8 @@ async def add_to_playlist(user: sql.User, new_releases) -> None:
         
         spotify_request_sync(user, ADD_TO_PLAYLIST_URL.format(playlist_id=user.playlist_id), body=body, method="POST")
     except Exception as e:
-        await error_message(f"Error adding to playlist: {e}")
+        # await error_message(f"Error adding to playlist: {e}")
+        pass
 
 async def new_releases(user: sql.User) -> str:
     token_info = OAuth2.refresh_access_token(user.refresh_token)
@@ -183,37 +183,45 @@ async def new_releases(user: sql.User) -> str:
     try:
         artists = get_all_artists(user)
     except Exception as e:
-        await error_message(f"Error requesting artists: {e}")
+        # await error_message(f"Error requesting artists: {e}")
         return "Error requesting artists"
     
     artists_ids = [(artist['id'], artist['name']) for artist in artists]
 
     new_releases = {}
     
-    async with aiohttp.ClientSession() as session:
-        async def process_single_artist(artist_id, artist_name):
-            albums = await recent_5_for_each_category_album(user, artist_id, session, SPOTIFY_SEMAPHORE)
-            
-            new_songs = {}
-            for album in albums:
-                current_time = datetime.now().strftime("%Y-%m-%d")
-                
-                if album['release_date'] == current_time:
-                    new_songs[album['id']] = album
-            
-            return artist_name, new_songs if new_songs else None
+    async def process_single_artist(artist_id, artist_name):
+        albums = await recent_5_for_each_category_album(user, artist_id)
         
-        tasks = [process_single_artist(artist_id, artist_name) for artist_id, artist_name in artists_ids]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        new_songs = {}
+        for album in albums:
+            current_time = datetime.now().strftime("%Y-%m-%d")
+            
+            if album['release_date'] == current_time:
+                new_songs[album['id']] = album
         
-        for result in results:
-            if isinstance(result, Exception):
-                print(f"Error processing artist: {result}")
-                await error_message(f"Error processing artist: {result}")
-                continue
-            artist_name, new_songs = result
-            if new_songs:
-                new_releases[artist_name] = new_songs
+        return artist_name, new_songs if new_songs else None
+    
+
+    # tasks = [process_single_artist(artist_id, artist_name) for artist_id, artist_name in artists_ids]
+    # results = await asyncio.gather(*tasks, return_exceptions=True)
+    
+    results = []
+    for artist_id, artist_name in artists_ids:
+        if artist_name in ["Awesome City Club", "BLUE ENCOUNT", "Masayuki Suzuki", "yama", "aespa", "SEKAI WO OWARI"]:
+            print(f"Processing artist: {artist_name}")
+            result = await process_single_artist(artist_id, artist_name)
+            results.append(result)
+
+    
+    for result in results:
+        if isinstance(result, Exception):
+            print(f"Error processing artist: {result}")
+            # await error_message(f"Error processing artist: {result}")
+            continue
+        artist_name, new_songs = result
+        if new_songs:
+            new_releases[artist_name] = new_songs
     
     str = ""
     if len(new_releases) > 0:
@@ -232,42 +240,78 @@ async def new_releases(user: sql.User) -> str:
     return str
 
 async def process_user(user: sql.User):
-    await send_message(user, "Finding new releases for the day")
+    # await send_message(user, "Finding new releases for the day")
     str = await new_releases(user)
-    await send_message(user, str)
+    # await send_message(user, str)
     
-@bot.event
-async def send_message(user: sql.User, message: str):
-    if user.discord_id:
-        try:
-            discord_user = await bot.fetch_user(user.discord_id)
-            await discord_user.send(message)
-        except discord.NotFound:
-            print(f"User with ID {user.discord_id} not found")
-        except discord.Forbidden:
-            print(f"Cannot send message to user {user.discord_id} (DMs closed)")
-        except Exception as e:
-            print(f"Error sending message to user {user.discord_id}: {e}")
-    else:
-        for client in bot.guilds:
-            for member in client.members:
-                if member.name == user.discord_username:
-                    try:
-                        sql.update_user_discord_id(user, member.id)
-                    except Exception as e:
-                        await error_message(f"Error updating user discord ID: {e}")
-                    await member.send(message)
+# @bot.event
+# async def send_message(user: sql.User, message: str):
+#     if user.discord_id:
+#         try:
+#             discord_user = await bot.fetch_user(user.discord_id)
+#             await discord_user.send(message)
+#         except discord.NotFound:
+#             print(f"User with ID {user.discord_id} not found")
+#         except discord.Forbidden:
+#             print(f"Cannot send message to user {user.discord_id} (DMs closed)")
+#         except Exception as e:
+#             print(f"Error sending message to user {user.discord_id}: {e}")
+#     else:
+#         for client in bot.guilds:
+#             for member in client.members:
+#                 if member.name == user.discord_username:
+#                     try:
+#                         sql.update_user_discord_id(user, member.id)
+#                     except Exception as e:
+#                         await error_message(f"Error updating user discord ID: {e}")
+#                     await member.send(message)
 
-@bot.event
-async def error_message(error: Exception):
-    if OWNER_DISCORD_USERNAME:
-        try:
-            owner_user = sql.get_user_by_discord_username(OWNER_DISCORD_USERNAME)
-            await send_message(owner_user, f"Error: {error}")
-        except Exception as e:
-            print(f"Error getting owner user: {e}")
+# @bot.event
+# async def error_message(error: Exception):
+#     if OWNER_DISCORD_USERNAME:
+#         try:
+#             owner_user = sql.get_user_by_discord_username(OWNER_DISCORD_USERNAME)
+#             await send_message(owner_user, f"Error: {error}")
+#         except Exception as e:
+#             print(f"Error getting owner user: {e}")
 
-@bot.event
+# @bot.event
+# async def on_ready():
+#     print("Starting the day loop")
+
+#     # tasks = []
+#     for user in sql.iterate_users_one_by_one():        
+#         print("Starting task for user", user.username)
+#         await process_user(user)
+#         # task = asyncio.create_task(process_user(user))
+#         # tasks.append(task)
+
+#     # await asyncio.gather(*tasks)
+#     print("Finished the day loop")
+#     await bot.close()
+
+# @bot.event
+# async def delete_messages():
+#     for client in bot.guilds:
+#         for member in client.members:
+#             if member.name == OWNER_DISCORD_USERNAME:
+#                 OWNER_DISCORD_ID = member.id
+#                 break
+
+#     try:
+#         user = await bot.fetch_user(OWNER_DISCORD_ID)
+#         channel = await user.create_dm()
+
+#         async for message in channel.history(limit=100):
+#             if message.author == bot.user:
+#                 await message.delete()
+#     except Exception as e:
+#         print(f"Error in on_ready: {e}")
+#         await bot.close()
+
+# if __name__ == "__main__":
+#     bot.run(DISCORD_TOKEN)
+
 async def on_ready():
     print("Starting the day loop")
 
@@ -280,26 +324,7 @@ async def on_ready():
 
     # await asyncio.gather(*tasks)
     print("Finished the day loop")
-    await bot.close()
 
-@bot.event
-async def delete_messages():
-    for client in bot.guilds:
-        for member in client.members:
-            if member.name == OWNER_DISCORD_USERNAME:
-                OWNER_DISCORD_ID = member.id
-                break
-
-    try:
-        user = await bot.fetch_user(OWNER_DISCORD_ID)
-        channel = await user.create_dm()
-
-        async for message in channel.history(limit=100):
-            if message.author == bot.user:
-                await message.delete()
-    except Exception as e:
-        print(f"Error in on_ready: {e}")
-        await bot.close()
 
 if __name__ == "__main__":
-    bot.run(DISCORD_TOKEN)
+    asyncio.run(on_ready())
