@@ -103,7 +103,7 @@ async def recent_5_for_each_category_album(user: sql.User, artist_id: str, sessi
         async with semaphore:
             response = await spotify_request(user, ARTIST_ALBUMS_URL.format(artist_id=artist_id), session, {
             "limit": 5,
-            "album_type": category,
+            "include_groups": category,
             "market": "US"
         })
         albums.extend(response['items'])
