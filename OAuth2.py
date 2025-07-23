@@ -9,7 +9,7 @@ redirectUri = os.getenv("redirectUri")
 clientSecret = os.getenv("clientSecret")
 authorizationUrl = os.getenv("authorizationUrl")
 tokenUrl = os.getenv("tokenUrl")
-scope = "user-follow-read playlist-modify-public playlist-modify-private user-read-recently-played playlist-read-private"
+scope = "user-follow-read playlist-modify-public playlist-modify-private user-read-recently-played playlist-read-private user-read-private"
 
 sp = OAuth2Session(client_id=clientId, redirect_uri=redirectUri, scope=scope)
 
