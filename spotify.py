@@ -72,9 +72,9 @@ def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] = {}, 
                 print(f"Rate limited (429). Waiting {e.response.headers.get('Retry-After')} seconds before retry...")
                 time.sleep(int(e.response.headers.get('Retry-After')))
                 continue
-            if e.response.status_code == 403:
-                print(e.response.text)
             else:
+                if e.response.status_code == 403:
+                    print(e.response.text)
                 raise e
 
 def get_all_artists(user: sql.User) -> list[dict]:
