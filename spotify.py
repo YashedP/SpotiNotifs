@@ -73,7 +73,7 @@ def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] = {}, 
                 time.sleep(int(e.response.headers.get('Retry-After')))
                 continue
             if e.response.status_code == 403:
-                print(e.response.json()['error']['message'])
+                print(e.response)
             else:
                 raise e
 
