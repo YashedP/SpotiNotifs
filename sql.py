@@ -1,11 +1,14 @@
 from sqlite3 import connect
+import sys
 from typing import Generator
 from pathlib import Path
 
 USERS_DB = Path(__file__).resolve().parent / "users.db"
 
+import json
+
 class User:
-    def __init__(self, user_UUID, username, discord_username, refresh_token, playlist_id=None, discord_id=None, access_token=None):
+    def __init__(self, user_UUID, username, discord_username, refresh_token, playlist_id=None, discord_id=None, user_items=None, access_token=None):
         self.user_UUID = user_UUID
         self.username = username
         self.discord_username = discord_username
@@ -13,18 +16,45 @@ class User:
         self.playlist_id = playlist_id
         self.discord_id = discord_id
         self.access_token = access_token
+        if user_items is None:
+            self.user_items = set()
+        elif isinstance(user_items, str):
+            try:
+                self.user_items = set(json.loads(user_items))
+            except (json.JSONDecodeError, TypeError):
+                self.user_items = set()
+        else:
+            self.user_items = set(user_items)
         
     def __str__(self):
-        return f"User(user_UUID={self.user_UUID}, username={self.username}, discord_username={self.discord_username}, refresh_token={self.refresh_token}, access_token={self.access_token}, discord_id={self.discord_id}, playlist_id={self.playlist_id})"
+        return f"User(user_UUID={self.user_UUID}, username={self.username}, discord_username={self.discord_username}, refresh_token={self.refresh_token}, access_token={self.access_token}, discord_id={self.discord_id}, playlist_id={self.playlist_id}, user_items={self.user_items})"
 
     def safe_str(self):
         return f"User(user_UUID={self.user_UUID}, username={self.username}, discord_username={self.discord_username}, discord_id={self.discord_id}, playlist_id={self.playlist_id})"
+    
+    def add_item(self, item):
+        self.user_items.add(item)
+    
+    def remove_item(self, item):
+        self.user_items.discard(item)
+    
+    def has_item(self, item):
+        return item in self.user_items
+    
+    def get_items(self):
+        return self.user_items.copy()
+    
+    def reset_items(self):
+        self.user_items = set()
+    
+    def get_items_json(self):
+        return json.dumps(list(self.user_items))
 
 def init_db() -> None:
     try:
         conn = connect(USERS_DB)
         cursor = conn.cursor()
-        cursor.execute("CREATE TABLE IF NOT EXISTS users (user_UUID TEXT, username TEXT, discord_username TEXT, refresh_token TEXT, playlist_id TEXT, discord_id TEXT)")
+        cursor.execute("CREATE TABLE IF NOT EXISTS users (user_UUID TEXT, username TEXT, discord_username TEXT, refresh_token TEXT, playlist_id TEXT, discord_id TEXT, user_items TEXT)")
         conn.commit()
         conn.close()
     except Exception as e:
@@ -41,7 +71,7 @@ def add_user(user: User) -> bool:
         if cursor.fetchone():
             print(f"User {user.username} already exists")
             return False
-        cursor.execute("INSERT INTO users (user_UUID, username, discord_username, refresh_token, playlist_id, discord_id) VALUES (?, ?, ?, ?, ?, ?)", (user.user_UUID, user.username, user.discord_username, user.refresh_token, user.playlist_id, user.discord_id))
+        cursor.execute("INSERT INTO users (user_UUID, username, discord_username, refresh_token, playlist_id, discord_id, user_items) VALUES (?, ?, ?, ?, ?, ?, ?)", (user.user_UUID, user.username, user.discord_username, user.refresh_token, user.playlist_id, user.discord_id, user.get_items_json()))
         conn.commit()
         conn.close()
         return True
@@ -57,7 +87,7 @@ def get_all_users() -> list[User]:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM users")
         users = cursor.fetchall()
-        return [User(user[0], user[1], user[2], user[3], user[4], user[5]) for user in users]
+        return [User(user[0], user[1], user[2], user[3], user[4], user[5], user[6]) for user in users]
     except Exception as e:
         if conn:
             conn.close()
@@ -72,7 +102,7 @@ def iterate_users_one_by_one() -> Generator[User, None, None]:
         users = cursor.fetchall()
         conn.close()
         for user in users:
-            yield User(user[0], user[1], user[2], user[3], user[4], user[5])
+            yield User(user[0], user[1], user[2], user[3], user[4], user[5], user[6])
     except Exception as e:
         if conn:
             conn.close()
@@ -87,7 +117,7 @@ def get_user_by_uuid(user_UUID: str) -> User:
         user = cursor.fetchone()
         conn.close()
         if user:
-            return User(user[0], user[1], user[2], user[3], user[4], user[5])
+            return User(user[0], user[1], user[2], user[3], user[4], user[5], user[6])
         return None
     except Exception as e:
         if conn:
@@ -139,9 +169,27 @@ def update_user_playlist_id(user: User, playlist_id: str) -> None:
         cursor = conn.cursor()
         cursor.execute("UPDATE users SET playlist_id = ? WHERE user_UUID = ?", (playlist_id, user.user_UUID))
         conn.commit()
+        conn.close()
     except Exception as e:
         if conn:
             conn.close()
+        print(f"Error updating user playlist ID: {e}")
+        raise
+
+def update_user_items(user: User) -> None:
+    """Update the user's items in the database"""
+    try:
+        conn = connect(USERS_DB)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET user_items = ? WHERE user_UUID = ?", (user.get_items_json(), user.user_UUID))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        if conn:
+            conn.close()
+        print(f"Error updating user items: {e}")
+        raise
+    
 def get_user_by_discord_username(discord_username: str) -> User:
     try:
         conn = connect(USERS_DB)
@@ -150,7 +198,7 @@ def get_user_by_discord_username(discord_username: str) -> User:
         user = cursor.fetchone()
         conn.close()
         if user:
-            return User(user[0], user[1], user[2], user[3], user[4], user[5])
+            return User(user[0], user[1], user[2], user[3], user[4], user[5], user[6])
         return None
     except Exception as e:
         if conn:
@@ -166,7 +214,7 @@ def get_user_by_username(username: str) -> User:
         user = cursor.fetchone()
         conn.close()
         if user:
-            return User(user[0], user[1], user[2], user[3], user[4], user[5])
+            return User(user[0], user[1], user[2], user[3], user[4], user[5], user[6])
         return None
     except Exception as e:
         if conn:
@@ -182,9 +230,42 @@ def scan_users() -> None:
         users = cursor.fetchall()
         conn.close()
         for user in users:
-            print(User(user[0], user[1], user[2], user[3], user[4], user[5]))
+            print(User(user[0], user[1], user[2], user[3], user[4], user[5], user[6]))
     except Exception as e:
         if conn:
             conn.close()
         print(f"Error scanning users: {e}")
         raise
+
+def data_migration():
+    try:
+        conn = connect(USERS_DB)
+        cursor = conn.cursor()
+        
+        cursor.execute("PRAGMA table_info(users)")
+        columns = [column[1] for column in cursor.fetchall()]
+        
+        if 'user_items' not in columns:
+            print("Adding user_items column to users table...")
+            cursor.execute("ALTER TABLE users ADD COLUMN user_items TEXT DEFAULT '[]'")
+            conn.commit()
+            print("Successfully added user_items column")
+        else:
+            print("user_items column already exists")
+            
+        conn.close()
+    except Exception as e:
+        if conn:
+            conn.close()
+        print(f"Error during data migration: {e}")
+        raise
+
+if __name__ == "__main__":
+    init_db()
+    if len(sys.argv) > 1:
+        if sys.argv[1] == "scan":
+            scan_users()
+        elif sys.argv[1] == "data_migration":
+            data_migration()
+    else:
+        print("Usage: python sql.py [scan | data_migration]")

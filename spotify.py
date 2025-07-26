@@ -17,6 +17,7 @@ DISCORD_TOKEN = os.getenv("discord_token")
 bot = discord.Client(intents=discord.Intents.all())
 OWNER_DISCORD_USERNAME = os.getenv("owner_discord_username")
 SPOTIFY_SEMAPHORE = asyncio.Semaphore(1)
+is_new_day = True if datetime.now().hour < 12 else False
 
 FOLLOWING_ARTISTS_URL  = "https://api.spotify.com/v1/me/following"
 ARTIST_ALBUMS_URL      = "https://api.spotify.com/v1/artists/{artist_id}/albums"
@@ -191,6 +192,9 @@ async def new_releases(user: sql.User) -> str:
     artists_ids = [(artist['id'], artist['name']) for artist in artists]
 
     new_releases = {}
+    songs_already_added = user.get_items()
+    if is_new_day:
+        user.reset_items()
     
     async with aiohttp.ClientSession() as session:
         async def process_single_artist(artist_id, artist_name):
@@ -201,13 +205,16 @@ async def new_releases(user: sql.User) -> str:
                 current_time = datetime.now().strftime("%Y-%m-%d")
                 
                 if album['release_date'] == current_time:
-                    new_songs[album['id']] = album
+                    if album['id'] not in songs_already_added:
+                        user.add_item(album['id'])
+                        new_songs[album['id']] = album
             
             return artist_name, new_songs if new_songs else None
         
         tasks = [process_single_artist(artist_id, artist_name) for artist_id, artist_name in artists_ids]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
+        sql.update_user_items(user)
         for result in results:
             if isinstance(result, Exception):
                 print(f"Error processing artist: {result}")
@@ -219,7 +226,10 @@ async def new_releases(user: sql.User) -> str:
     
     str = ""
     if len(new_releases) > 0:
-        str += f"New Releases! {datetime.now().strftime("%m/%d")}\n\n"
+        if is_new_day:
+            str += f"New Releases! {datetime.now().strftime("%m/%d")}\n\n"
+        else:
+            str += f"New Releases! {datetime.now().strftime("%m/%d")}\n\n" + "Strays from today:\n"
     
         for artist, songs in new_releases.items():
             str += f"**{artist}**\n"
@@ -229,12 +239,18 @@ async def new_releases(user: sql.User) -> str:
         
         await add_to_playlist(user, new_releases)
     else:
-        str += f"No new releases today! {datetime.now().strftime("%m/%d")}\n\n"
+        if is_new_day:
+            str += f"No new releases today! {datetime.now().strftime("%m/%d")}\n\n"
+        else:
+            str += f"No strays today! {datetime.now().strftime("%m/%d")}\n\n"
 
     return str
 
 async def process_user(user: sql.User):
-    await send_message(user, "Finding new releases for the day")
+    if is_new_day:
+        await send_message(user, "Finding new releases for the day!")
+    else:
+        await send_message(user, "Catching up on any strays from today!")
     str = await new_releases(user)
     await send_message(user, str)
     
