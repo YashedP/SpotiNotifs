@@ -286,21 +286,6 @@ async def error_message(error: Exception):
             print(f"Error getting owner user: {e}")
 
 @bot.event
-async def on_ready():
-    print("Starting the day loop")
-
-    # tasks = []
-    for user in sql.iterate_users_one_by_one():        
-        print("Starting task for user", user.username)
-        await process_user(user)
-        # task = asyncio.create_task(process_user(user))
-        # tasks.append(task)
-
-    # await asyncio.gather(*tasks)
-    print("Finished the day loop")
-    await bot.close()
-
-@bot.event
 async def delete_messages():
     for client in bot.guilds:
         for member in client.members:
@@ -318,6 +303,21 @@ async def delete_messages():
     except Exception as e:
         print(f"Error in on_ready: {e}")
         await bot.close()
+
+@bot.event
+async def on_ready():
+    print("Starting the day loop")
+
+    # tasks = []
+    for user in sql.iterate_users_one_by_one():        
+        print("Starting task for user", user.username)
+        await process_user(user)
+        # task = asyncio.create_task(process_user(user))
+        # tasks.append(task)
+
+    # await asyncio.gather(*tasks)
+    print("Finished the day loop")
+    await bot.close()
 
 if __name__ == "__main__":
     bot.run(DISCORD_TOKEN)
