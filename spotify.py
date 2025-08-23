@@ -54,7 +54,7 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
                 await asyncio.sleep(seconds_to_wait)
                 continue
             else:
-                raise ed
+                raise 
     return {}
 
 def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] = {}, body: dict[str, Any] = {}, method: str = "GET") -> dict[str, Any]:
