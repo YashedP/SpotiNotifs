@@ -127,6 +127,31 @@ def get_all_artists(user: sql.User) -> list[dict]:
     
     return artists
 
+async def get_all_albums(user: sql.User, artist_id: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore) -> list[str]:
+    albums = []
+    
+    for category in ["album", "single", "appears_on", "compilation"]:
+        next_url = None
+        while True:
+            if next_url:
+                async with semaphore:
+                    response = await spotify_request(user, next_url, session)
+            else:
+                async with semaphore:
+                    response = await spotify_request(user, ARTIST_ALBUMS_URL.format(artist_id=artist_id), session, {
+                        "limit": "50",
+                        "include_groups": category,
+                        "market": "US",
+                    })
+            
+            albums.extend(response['items'])
+            next_url = response['next']
+            
+            if not next_url:
+                break
+    
+    return albums
+
 async def recent_20_for_each_category_album(user: sql.User, artist_id: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore) -> list[str]:
     albums = []
     for category in ["album", "single", "appears_on", "compilation"]:
