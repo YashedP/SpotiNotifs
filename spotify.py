@@ -54,7 +54,7 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
                 await asyncio.sleep(seconds_to_wait)
                 continue
             else:
-                raise e
+                raise ed
     return {}
 
 def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] = {}, body: dict[str, Any] = {}, method: str = "GET") -> dict[str, Any]:
@@ -117,7 +117,7 @@ async def get_all_albums(user: sql.User, artist_id: str, session: aiohttp.Client
             async with semaphore:
                 response = await spotify_request(user, ARTIST_ALBUMS_URL.format(artist_id=artist_id), session, {
                     "limit": "50",
-                    "include_groups": "album,single,appears_on,compilation",
+                    "include_groups": "album,single,appears_on",
                     "market": "US",
                 })
         
@@ -132,7 +132,7 @@ async def get_all_albums(user: sql.User, artist_id: str, session: aiohttp.Client
 
 async def recent_20_for_each_category_album(user: sql.User, artist_id: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore) -> list[str]:
     albums = []
-    for category in ["album", "single", "appears_on", "compilation"]:
+    for category in ["album", "single", "appears_on"]:
         async with semaphore:
             response = await spotify_request(user, ARTIST_ALBUMS_URL.format(artist_id=artist_id), session, {
                 "limit": "20",
@@ -253,6 +253,7 @@ async def new_releases(user: sql.User) -> str:
                             
             return artist_name, new_songs if new_songs else None
         
+        artists_ids = [("2p4aN0Uxkk3iT3HK0cJ2cJ", "Tokischa")]
         tasks = [process_single_artist(artist_id, artist_name) for artist_id, artist_name in artists_ids]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -265,6 +266,7 @@ async def new_releases(user: sql.User) -> str:
             artist_name, new_songs = result
             if new_songs:
                 new_releases[artist_name] = new_songs
+    
     
     str = ""
     if len(new_releases) > 0:
@@ -312,10 +314,14 @@ async def process_user(user: sql.User):
 
 @bot.event
 async def send_message(user: sql.User, message: str):
+    # Split message if it's too long
+    messages = split_long_message(message)
+    
     if user.discord_id:
         try:
             discord_user = await bot.fetch_user(user.discord_id)
-            await discord_user.send(message)
+            for msg in messages:
+                await discord_user.send(msg)
         except discord.NotFound:
             print(f"User with ID {user.discord_id} not found")
         except discord.Forbidden:
@@ -330,7 +336,38 @@ async def send_message(user: sql.User, message: str):
                         sql.update_user_discord_id(user, str(member.id))
                     except Exception as e:
                         await error_message(f"Error updating user discord ID: {e}")
-                    await member.send(message)
+                    for msg in messages:
+                        await member.send(msg)
+
+def split_long_message(message: str, max_length: int = 1900) -> list[str]:
+    """Split a message that's too long by looking for \n delimiters"""
+    if len(message) <= max_length:
+        return [message]
+    
+    messages = []
+    current_message = ""
+    
+    # Split by lines
+    lines = message.split('\n')
+    
+    for line in lines:
+        # Check if adding this line would exceed the limit
+        if len(current_message + line + '\n') > max_length:
+            if current_message:
+                messages.append(current_message.rstrip())
+                current_message = line + '\n'
+            else:
+                # If a single line is too long, we have to truncate it
+                messages.append(line[:max_length-3] + "...")
+                current_message = ""
+        else:
+            current_message += line + '\n'
+    
+    # Add the last message if it has content
+    if current_message.strip():
+        messages.append(current_message.rstrip())
+    
+    return messages
 
 @bot.event
 async def error_message(error: Exception):
