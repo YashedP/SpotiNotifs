@@ -127,12 +127,12 @@ def get_all_artists(user: sql.User) -> list[dict]:
     
     return artists
 
-async def recent_5_for_each_category_album(user: sql.User, artist_id: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore) -> list[str]:
+async def recent_20_for_each_category_album(user: sql.User, artist_id: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore) -> list[str]:
     albums = []
     for category in ["album", "single", "appears_on", "compilation"]:
         async with semaphore:
             response = await spotify_request(user, ARTIST_ALBUMS_URL.format(artist_id=artist_id), session, {
-                "limit": "5",
+                "limit": "20",
                 "include_groups": category,
                 "market": "US"
             })
@@ -221,7 +221,7 @@ async def new_releases(user: sql.User) -> str:
     async with aiohttp.ClientSession() as session:
         async def process_single_artist(artist_id, artist_name):
             try:
-                albums = await recent_5_for_each_category_album(user, artist_id, session, SPOTIFY_SEMAPHORE)
+                albums = await recent_20_for_each_category_album(user, artist_id, session, SPOTIFY_SEMAPHORE)
                 new_songs = {}
                 
                 for album in albums:
@@ -362,16 +362,22 @@ if __name__ == "__main__":
         mode = sys.argv[1]
         if mode == "catchup":
             catchup = True
-            if len(sys.argv) != 3:
-                print("Usage: python spotify.py catchup <start_date YYYY-MM-DD> <end_date YYYY-MM-DD>")
-                start_day = datetime.strptime(sys.argv[2], "%Y-%m-%d")
-                end_day = datetime.strptime(sys.argv[3], "%Y-%m-%d")
+            if len(sys.argv) == 4:
+                try:
+                    start_day = datetime.strptime(sys.argv[2], "%d-%m-%y")
+                    end_day = datetime.strptime(sys.argv[3], "%d-%m-%y")
+                except ValueError:
+                    print("Usage: python spotify.py catchup <start_date DD-MM-YYYY> <end_date DD-MM-YYYY>")
+                    sys.exit(1)
                 delta = end_day - start_day
                 catchup_days.append(start_day)
                 for i in range(delta.days + 1):
                     day = start_day + timedelta(days=i)
                     catchup_days.append(day)
                 catchup_days.append(end_day)
+            else:
+                print("Usage: python spotify.py catchup <start_date DD-MM-YYYY> <end_date DD-MM-YYYY>")
+                sys.exit(1)
         
     if DISCORD_TOKEN:
         bot.run(DISCORD_TOKEN)
