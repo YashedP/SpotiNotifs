@@ -310,10 +310,11 @@ async def new_releases(user: sql.User) -> str:
 async def process_user(user: sql.User):
     if catchup:
         await send_message(user, "Catching up on any strays of all days missed due to the bot outage! Apologies for the delay.")
-    elif is_new_day:
-        await send_message(user, "Finding new releases for the day!")
     else:
-        await send_message(user, "Catching up on any strays from today!")
+        if is_new_day:
+            await send_message(user, "Finding new releases for the day!")
+        else:
+            await send_message(user, "Catching up on any strays from today!")
     
     try:
         str = await new_releases(user)
