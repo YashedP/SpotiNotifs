@@ -44,25 +44,16 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
                 response.raise_for_status()
                 return await response.json()
         except aiohttp.ClientResponseError as e:
-            retry_after = None
-            if hasattr(e, 'headers') and e.headers:
-                retry_after = e.headers.get('Retry-After')
-    
-            seconds_to_wait = int(retry_after) if retry_after and str(retry_after).isdigit() else 1
-            print(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry...")
-    
             if e.status == 429:
+                seconds_to_wait = int(e.headers.get('Retry-After'))
+                print(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry...")
                 if seconds_to_wait > 20:
-                    await error_message(e)
+                    await error_message(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry... for user {user.safe_str()}")
                     sys.exit(1)
                 await asyncio.sleep(seconds_to_wait)
                 continue
             else:
-                await error_message(e)
-                raise
-        except Exception as e:
-            await error_message(e)
-            raise
+                raise e
     return {}
 
 def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] = {}, body: dict[str, Any] = {}, method: str = "GET") -> dict[str, Any]:
@@ -80,26 +71,15 @@ def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] = {}, 
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
-            retry_after = None
-            if hasattr(e, 'response') and e.response:
-                retry_after = e.response.headers.get('Retry-After')
-    
-            seconds_to_wait = int(retry_after) if retry_after and str(retry_after).isdigit() else 1
+            print(f"Error requesting {url}: {e}")
             if hasattr(e, 'response') and e.response and e.response.status_code == 429:
-                time.sleep(seconds_to_wait)
+                print(f"Rate limited (429). Waiting {e.response.headers.get('Retry-After')} seconds before retry...")
+                time.sleep(int(e.response.headers.get('Retry-After')))
                 continue
-    
-            try:
-                asyncio.run(error_message(e))
-            except Exception:
-                print(f"Error reporting: {e}")
-            raise
-        except Exception as e:
-            try:
-                asyncio.run(error_message(e))
-            except Exception:
-                print(f"Error reporting: {e}")
-            raise
+            else:
+                if e.response.status_code == 403:
+                    print(e.response.text)
+                raise e
     return {}
 
 def get_all_artists(user: sql.User) -> list[dict]:
@@ -117,11 +97,8 @@ def get_all_artists(user: sql.User) -> list[dict]:
             artists.extend(response['items'])
             next_cursor = response['cursors']['after']
         except requests.exceptions.RequestException as e:
-            try:
-                asyncio.run(error_message(e))
-            except Exception:
-                print(f"Error reporting: {e}")
-            break
+            print(f"Error requesting {FOLLOWING_ARTISTS_URL}: {e}")
+            return artists
         if not next_cursor:
             break
     
@@ -222,7 +199,7 @@ async def add_to_playlist(user: sql.User, new_releases) -> None:
         body = {"uris": uris}
         spotify_request_sync(user, ADD_TO_PLAYLIST_URL.format(playlist_id=user.playlist_id), body=body, method="POST")
     except Exception as e:
-        await error_message(e)
+        await error_message(f"Error adding to playlist: {e}")
 
 async def new_releases(user: sql.User) -> str:
     token_info = OAuth2.refresh_access_token(user.refresh_token)
@@ -233,7 +210,7 @@ async def new_releases(user: sql.User) -> str:
     try:
         artists = get_all_artists(user)
     except Exception as e:
-        await error_message(e)
+        await error_message(f"Error requesting artists: {e}")
         return "Error requesting artists"
     
     artists_ids = [(artist['id'], artist['name']) for artist in artists]
@@ -245,44 +222,43 @@ async def new_releases(user: sql.User) -> str:
     
     async with aiohttp.ClientSession() as session:
         async def process_single_artist(artist_id, artist_name):
-            try:
-                if not catchup:
-                    albums = await recent_20_for_each_category_album(user, artist_id, session, SPOTIFY_SEMAPHORE)
-                else:
-                    albums = await get_all_albums(user, artist_id, session, SPOTIFY_SEMAPHORE)
-                    
-                new_songs = {}
+            if not catchup:
+                albums = await recent_20_for_each_category_album(user, artist_id, session, SPOTIFY_SEMAPHORE)
+            else:
+                albums = await get_all_albums(user, artist_id, session, SPOTIFY_SEMAPHORE)
                 
-                for album in albums:
-                    if not catchup:
-                        current_time = datetime.now().strftime("%Y-%m-%d")
-                    
-                        if album.get('release_date') == current_time: # type: ignore
-                            album_id = album.get('id') # type: ignore
-                    
-                            if album_id and album_id not in songs_already_added:
-                                user.add_item(album_id)
-                                new_songs[album_id] = album
-                    else:
-                        days = [day.strftime("%Y-%m-%d") for day in catchup_days]
-                        if album.get('release_date') in days: # type: ignore
-                            album_id = album.get('id') # type: ignore
-                            
-                            if album_id:
-                                user.add_item(album_id)
-                                new_songs[album_id] = album
+            new_songs = {}
+            
+            for album in albums:
+                if not catchup:
+                    current_time = datetime.now().strftime("%Y-%m-%d")
+                
+                    if album.get('release_date') == current_time: # type: ignore
+                        album_id = album.get('id') # type: ignore
+                
+                        if album_id and album_id not in songs_already_added:
+                            user.add_item(album_id)
+                            new_songs[album_id] = album
+                else:
+                    days = [day.strftime("%Y-%m-%d") for day in catchup_days]
+                    if album.get('release_date') in days: # type: ignore
+                        album_id = album.get('id') # type: ignore
+                        
+                        if album_id:
+                            user.add_item(album_id)
+                            new_songs[album_id] = album
                             
                 return artist_name, new_songs if new_songs else None
-            except Exception as e:
-                await error_message(e)
-                
-                return artist_name, None
-        
+            
         tasks = [process_single_artist(artist_id, artist_name) for artist_id, artist_name in artists_ids]
-        results = await asyncio.gather(*tasks, return_exceptions=False)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
     
         sql.update_user_items(user)
         for result in results:
+            if isinstance(result, Exception):
+                print(f"Error processing artist: {result}")
+                await error_message(f"Error processing artist: {result}")
+                continue
             artist_name, new_songs = result
             if new_songs:
                 new_releases[artist_name] = new_songs
@@ -320,7 +296,7 @@ async def process_user(user: sql.User):
         str = await new_releases(user)
         await send_message(user, str)
     except Exception as e:
-        await error_message(e)
+        await error_message(f"Error processing user: {user.safe_str()}")
 
 @bot.event
 async def send_message(user: sql.User, message: str):
@@ -341,7 +317,7 @@ async def send_message(user: sql.User, message: str):
                     try:
                         sql.update_user_discord_id(user, str(member.id))
                     except Exception as e:
-                        await error_message(e)
+                        await error_message(f"Error updating user discord ID: {e}")
                     await member.send(message)
 
 @bot.event
