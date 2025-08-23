@@ -107,26 +107,26 @@ def get_all_artists(user: sql.User) -> list[dict]:
 async def get_all_albums(user: sql.User, artist_id: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore) -> list[str]:
     albums = []
     
-    for category in ["album", "single", "appears_on", "compilation"]:
-        next_url = None
-        while True:
-            if next_url:
-                async with semaphore:
-                    response = await spotify_request(user, next_url, session)
-            else:
-                async with semaphore:
-                    response = await spotify_request(user, ARTIST_ALBUMS_URL.format(artist_id=artist_id), session, {
-                        "limit": "50",
-                        "include_groups": category,
-                        "market": "US",
-                    })
-            
-            albums.extend(response['items'])
-            next_url = response['next']
-            
-            if not next_url:
-                break
-    
+    next_url = None
+    while True:
+        if next_url:
+            async with semaphore:
+                response = await spotify_request(user, next_url, session)
+        else:
+            async with semaphore:
+                response = await spotify_request(user, ARTIST_ALBUMS_URL.format(artist_id=artist_id), session, {
+                    "limit": "50",
+                    "include_groups": "album,single,appears_on,compilation",
+                    "market": "US",
+                })
+        
+        albums.extend(response['items'])
+        
+        next_url = response['next']
+        
+        if not next_url:
+            break
+
     return albums
 
 async def recent_20_for_each_category_album(user: sql.User, artist_id: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore) -> list[str]:
@@ -226,7 +226,7 @@ async def new_releases(user: sql.User) -> str:
                 albums = await recent_20_for_each_category_album(user, artist_id, session, SPOTIFY_SEMAPHORE)
             else:
                 albums = await get_all_albums(user, artist_id, session, SPOTIFY_SEMAPHORE)
-                
+
             new_songs = {}
             
             for album in albums:
@@ -236,23 +236,24 @@ async def new_releases(user: sql.User) -> str:
                     if album.get('release_date') == current_time: # type: ignore
                         album_id = album.get('id') # type: ignore
                 
-                        if album_id and album_id not in songs_already_added:
+                        if album_id not in songs_already_added:
                             user.add_item(album_id)
                             new_songs[album_id] = album
                 else:
                     days = [day.strftime("%Y-%m-%d") for day in catchup_days]
+
                     if album.get('release_date') in days: # type: ignore
                         album_id = album.get('id') # type: ignore
                         
                         if album_id:
-                            user.add_item(album_id)
                             new_songs[album_id] = album
                             
-                return artist_name, new_songs if new_songs else None
-            
+            return artist_name, new_songs if new_songs else None
+        
+        artists_ids = [("7n2Ycct7Beij7Dj7meI4X0", "TWICE")]
         tasks = [process_single_artist(artist_id, artist_name) for artist_id, artist_name in artists_ids]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-    
+
         sql.update_user_items(user)
         for result in results:
             if isinstance(result, Exception):
@@ -304,6 +305,7 @@ async def process_user(user: sql.User):
         str = await new_releases(user)
         await send_message(user, str)
     except Exception as e:
+        print(e)
         await error_message(f"Error processing user: {user.safe_str()}")
 
 @bot.event
