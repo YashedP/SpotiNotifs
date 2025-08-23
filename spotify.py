@@ -17,6 +17,7 @@ DISCORD_TOKEN = os.getenv("discord_token")
 bot = discord.Client(intents=discord.Intents.all())
 OWNER_DISCORD_USERNAME = os.getenv("owner_discord_username")
 SPOTIFY_SEMAPHORE = asyncio.Semaphore(1)
+BREAKPOINT = 100
 is_new_day = True if datetime.now().hour < 12 else False
 catchup = False
 catchup_days = []
@@ -196,8 +197,10 @@ async def add_to_playlist(user: sql.User, new_releases) -> None:
                     next_url = response['next']
                 uris.extend([item['uri'] for item in items])
     
-        body = {"uris": uris}
-        spotify_request_sync(user, ADD_TO_PLAYLIST_URL.format(playlist_id=user.playlist_id), body=body, method="POST")
+        num_requests_required = len(uris) // BREAKPOINT + 1
+        for i in range(num_requests_required):
+            body = {"uris": uris[i * BREAKPOINT : (i + 1) * BREAKPOINT]}
+            spotify_request_sync(user, ADD_TO_PLAYLIST_URL.format(playlist_id=user.playlist_id), body=body, method="POST")
     except Exception as e:
         await error_message(f"Error adding to playlist: {e}")
 
@@ -250,7 +253,6 @@ async def new_releases(user: sql.User) -> str:
                             
             return artist_name, new_songs if new_songs else None
         
-        artists_ids = [("7n2Ycct7Beij7Dj7meI4X0", "TWICE")]
         tasks = [process_single_artist(artist_id, artist_name) for artist_id, artist_name in artists_ids]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
