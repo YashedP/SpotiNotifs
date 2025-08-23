@@ -253,7 +253,6 @@ async def new_releases(user: sql.User) -> str:
                             
             return artist_name, new_songs if new_songs else None
         
-        artists_ids = [("2p4aN0Uxkk3iT3HK0cJ2cJ", "Tokischa")]
         tasks = [process_single_artist(artist_id, artist_name) for artist_id, artist_name in artists_ids]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
