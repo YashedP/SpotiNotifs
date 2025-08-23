@@ -265,16 +265,24 @@ async def new_releases(user: sql.User) -> str:
     
     str = ""
     if len(new_releases) > 0:
-        if is_new_day:
-            str += f"New Releases! {datetime.now().strftime('%m/%d')}\n\n"
-        else:
-            str += f"New Releases! {datetime.now().strftime('%m/%d')}\n\n" + "Strays from today:\n"
-        for artist, songs in new_releases.items():
-            str += f"**{artist}**\n"
-            for song in songs.values():
-                str += f"* [{song['name']}]({song['external_urls']['spotify']})\n"
-            str += "\n"
-    
+        if catchup:
+            str += f"New Releases! {catchup_days[0].strftime('%m/%d')}-{catchup_days[-1].strftime('%m/%d')}\n\n"
+            for artist, songs in new_releases.items():
+                str += f"**{artist}**\n"
+                for song in songs.values():
+                    str += f"* [{song['name']}]({song['external_urls']['spotify']})\n"
+                str += "\n"
+        else:    
+            if is_new_day:
+                str += f"New Releases! {datetime.now().strftime('%m/%d')}\n\n"
+            else:
+                str += f"New Releases! {datetime.now().strftime('%m/%d')}\n\n" + "Strays from today:\n"
+            for artist, songs in new_releases.items():
+                str += f"**{artist}**\n"
+                for song in songs.values():
+                    str += f"* [{song['name']}]({song['external_urls']['spotify']})\n"
+                str += "\n"
+        
         await add_to_playlist(user, new_releases)
     else:
         if is_new_day:
@@ -285,7 +293,7 @@ async def new_releases(user: sql.User) -> str:
 
 async def process_user(user: sql.User):
     if catchup:
-        await send_message(user, "Catching up on any strays of all days missed due to the bot outage! Apologies for the delay.")
+        await send_message(user, "Catching up on all songs missed due to the bot outage! Apologies for the delay.")
     else:
         if is_new_day:
             await send_message(user, "Finding new releases for the day!")
@@ -366,14 +374,18 @@ async def on_ready():
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         mode = sys.argv[1]
+            
         if mode == "catchup":
             catchup = True
+            
             if len(sys.argv) == 4:
                 try:
-                    start_day = datetime.strptime(sys.argv[2], "%d-%m-%y")
-                    end_day = datetime.strptime(sys.argv[3], "%d-%m-%y")
+                    start_day = datetime.strptime(sys.argv[2], "%m-%d-%Y")
+                    end_day = datetime.strptime(sys.argv[3], "%m-%d-%Y")
+                    if end_day == datetime.now().date():
+                        end_day = end_day - timedelta(days=1)
                 except ValueError:
-                    print("Usage: python spotify.py catchup <start_date DD-MM-YYYY> <end_date DD-MM-YYYY>")
+                    print("Invalid date format, Usage: python spotify.py catchup <start_date MM-DD-YYYY> <end_date MM-DD-YYYY>")
                     sys.exit(1)
                 delta = end_day - start_day
                 catchup_days.append(start_day)
@@ -382,9 +394,11 @@ if __name__ == "__main__":
                     catchup_days.append(day)
                 catchup_days.append(end_day)
             else:
-                print("Usage: python spotify.py catchup <start_date DD-MM-YYYY> <end_date DD-MM-YYYY>")
+                print("Usage: python spotify.py catchup <start_date MM-DD-YYYY> <end_date MM-DD-YYYY>")
                 sys.exit(1)
-        
+        else:
+            print("Invalid mode, use 'catchup'")
+
     if DISCORD_TOKEN:
         bot.run(DISCORD_TOKEN)
     else:
