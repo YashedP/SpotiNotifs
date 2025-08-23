@@ -47,20 +47,24 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
         except aiohttp.ClientResponseError as e:
             if e.status == 429:
                 seconds_to_wait = int(e.headers.get('Retry-After'))
+                
                 print(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry...")
-                if seconds_to_wait > 20:
+                if seconds_to_wait > 60:
                     await error_message(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry... for user {user.safe_str()}")
                     sys.exit(1)
+                
                 await asyncio.sleep(seconds_to_wait)
-                continue
             else:
                 raise 
+        attempts -= 1
     return {}
 
 def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] = {}, body: dict[str, Any] = {}, method: str = "GET") -> dict[str, Any]:
     headers = {"Authorization": f"Bearer {user.access_token}"}
     attempts = 3
     while attempts > 0:
+        if attempts != 3:
+            print(f"Attempt {3 - attempts + 1} of 3 for {url}")
         try:
             if method == "GET":
                 response = requests.get(url, params=params, headers=headers)
@@ -72,15 +76,20 @@ def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] = {}, 
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
-            print(f"Error requesting {url}: {e}")
             if hasattr(e, 'response') and e.response and e.response.status_code == 429:
-                print(f"Rate limited (429). Waiting {e.response.headers.get('Retry-After')} seconds before retry...")
-                time.sleep(int(e.response.headers.get('Retry-After')))
-                continue
+                seconds_to_wait = int(e.response.headers.get('Retry-After'))
+                
+                print(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry...")
+                if seconds_to_wait > 60:
+                    asyncio.run(error_message(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry... for user {user.safe_str()}"))
+                    sys.exit(1)
+                
+                time.sleep(seconds_to_wait)
             else:
-                if e.response.status_code == 403:
+                if hasattr(e, 'response') and e.response and e.response.status_code == 403:
                     print(e.response.text)
                 raise e
+        attempts -= 1
     return {}
 
 def get_all_artists(user: sql.User) -> list[dict]:
