@@ -3,7 +3,7 @@ import OAuth2
 import aiohttp
 import requests
 from typing import Any
-from datetime import datetime
+from datetime import datetime, timedelta
 import discord
 from dotenv import load_dotenv
 import os
@@ -18,6 +18,8 @@ bot = discord.Client(intents=discord.Intents.all())
 OWNER_DISCORD_USERNAME = os.getenv("owner_discord_username")
 SPOTIFY_SEMAPHORE = asyncio.Semaphore(1)
 is_new_day = True if datetime.now().hour < 12 else False
+catchup = False
+catchup_days = []
 
 FOLLOWING_ARTISTS_URL  = "https://api.spotify.com/v1/me/following"
 ARTIST_ALBUMS_URL      = "https://api.spotify.com/v1/artists/{artist_id}/albums"
@@ -221,17 +223,32 @@ async def new_releases(user: sql.User) -> str:
             try:
                 albums = await recent_5_for_each_category_album(user, artist_id, session, SPOTIFY_SEMAPHORE)
                 new_songs = {}
+                
                 for album in albums:
-                    current_time = datetime.now().strftime("%Y-%m-%d")
-                    if album.get('release_date') == current_time: # type: ignore
-                        album_id = album.get('id') # type: ignore
-                        if album_id and album_id not in songs_already_added:
-                            user.add_item(album_id)
-                            new_songs[album_id] = album
+                    if not catchup:
+                        current_time = datetime.now().strftime("%Y-%m-%d")
+                    
+                        if album.get('release_date') == current_time: # type: ignore
+                            album_id = album.get('id') # type: ignore
+                    
+                            if album_id and album_id not in songs_already_added:
+                                user.add_item(album_id)
+                                new_songs[album_id] = album
+                    else:
+                        days = [day.strftime("%Y-%m-%d") for day in catchup_days]
+                        if album.get('release_date') in days: # type: ignore
+                            album_id = album.get('id') # type: ignore
+                            
+                            if album_id:
+                                user.add_item(album_id)
+                                new_songs[album_id] = album
+                            
                 return artist_name, new_songs if new_songs else None
             except Exception as e:
                 await error_message(e)
+                
                 return artist_name, None
+        
         tasks = [process_single_artist(artist_id, artist_name) for artist_id, artist_name in artists_ids]
         results = await asyncio.gather(*tasks, return_exceptions=False)
     
@@ -262,10 +279,13 @@ async def new_releases(user: sql.User) -> str:
     return str
 
 async def process_user(user: sql.User):
-    if is_new_day:
+    if catchup:
+        await send_message(user, "Catching up on any strays of all days missed due to the bot outage! Apologies for the delay.")
+    elif is_new_day:
         await send_message(user, "Finding new releases for the day!")
     else:
         await send_message(user, "Catching up on any strays from today!")
+    
     try:
         str = await new_releases(user)
         await send_message(user, str)
@@ -338,6 +358,21 @@ async def on_ready():
     await bot.close()
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        mode = sys.argv[1]
+        if mode == "catchup":
+            catchup = True
+            if len(sys.argv) != 3:
+                print("Usage: python spotify.py catchup <start_date YYYY-MM-DD> <end_date YYYY-MM-DD>")
+                start_day = datetime.strptime(sys.argv[2], "%Y-%m-%d")
+                end_day = datetime.strptime(sys.argv[3], "%Y-%m-%d")
+                delta = end_day - start_day
+                catchup_days.append(start_day)
+                for i in range(delta.days + 1):
+                    day = start_day + timedelta(days=i)
+                    catchup_days.append(day)
+                catchup_days.append(end_day)
+        
     if DISCORD_TOKEN:
         bot.run(DISCORD_TOKEN)
     else:
