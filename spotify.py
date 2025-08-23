@@ -246,7 +246,11 @@ async def new_releases(user: sql.User) -> str:
     async with aiohttp.ClientSession() as session:
         async def process_single_artist(artist_id, artist_name):
             try:
-                albums = await recent_20_for_each_category_album(user, artist_id, session, SPOTIFY_SEMAPHORE)
+                if not catchup:
+                    albums = await recent_20_for_each_category_album(user, artist_id, session, SPOTIFY_SEMAPHORE)
+                else:
+                    albums = await get_all_albums(user, artist_id, session, SPOTIFY_SEMAPHORE)
+                    
                 new_songs = {}
                 
                 for album in albums:
