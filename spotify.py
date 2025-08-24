@@ -130,7 +130,10 @@ async def get_all_albums(user: sql.User, artist_id: str, session: aiohttp.Client
                     "market": "US",
                 })
         
-        albums.extend(response['items'])
+        for item in response['items']:
+            if item['album_type'] == "compilation":
+                continue
+            albums.append(item)
         
         next_url = response['next']
         
