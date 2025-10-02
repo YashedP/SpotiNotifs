@@ -37,6 +37,7 @@ sql.init_db()
 async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSession, params: dict[str, str] = {}) -> dict[str, Any]:
     headers = {"Authorization": f"Bearer {user.access_token}"}
     attempts = 3
+    
     while attempts > 0:
         if attempts != 3:
             print(f"Attempt {3 - attempts + 1} of 3 for {url}")
@@ -54,6 +55,10 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
                     sys.exit(1)
                 
                 await asyncio.sleep(seconds_to_wait)
+            elif e.status == 401:
+                print(f"Unauthorized (401) for user {user.safe_str()}. Giving up on this user.")
+                await error_message(f"Unauthorized (401) for user {user.safe_str()}. Skipping this user.")
+                return {}
             else:
                 raise 
         attempts -= 1
@@ -62,6 +67,7 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
 def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] = {}, body: dict[str, Any] = {}, method: str = "GET") -> dict[str, Any]:
     headers = {"Authorization": f"Bearer {user.access_token}"}
     attempts = 3
+    
     while attempts > 0:
         if attempts != 3:
             print(f"Attempt {3 - attempts + 1} of 3 for {url}")
@@ -85,6 +91,10 @@ def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] = {}, 
                     sys.exit(1)
                 
                 time.sleep(seconds_to_wait)
+            elif hasattr(e, 'response') and e.response and e.response.status_code == 401:
+                print(f"Unauthorized (401) for user {user.safe_str()}. Giving up on this user.")
+                asyncio.run(error_message(f"Unauthorized (401) for user {user.safe_str()}. Skipping this user."))
+                return {}
             else:
                 if hasattr(e, 'response') and e.response and e.response.status_code == 403:
                     print(e.response.text)
