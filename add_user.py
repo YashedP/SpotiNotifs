@@ -123,13 +123,21 @@ def callback():
     print(f"DEBUG - existing_user_id: {existing_user_id}")
     
     print("DEBUG - About to call OAuth2.get_access_token")
+    print(f"DEBUG - authCode length: {len(authCode) if authCode else 'None'}")
+    print(f"DEBUG - authCode preview: {authCode[:20] if authCode else 'None'}...")
+    
     try:
+        print("DEBUG - Calling OAuth2.get_access_token now...")
         response = OAuth2.get_access_token(authCode)
-        print(f"DEBUG - OAuth2 response: {response}")
+        print(f"DEBUG - OAuth2 response received: {type(response)}")
+        print(f"DEBUG - OAuth2 response keys: {list(response.keys()) if isinstance(response, dict) else 'Not a dict'}")
         refresh_token = response['refresh_token']
-        print(f"DEBUG - refresh_token: {refresh_token}")
+        print(f"DEBUG - refresh_token extracted: {refresh_token[:20] if refresh_token else 'None'}...")
     except Exception as e:
         print(f"ERROR - Failed to get access token: {e}")
+        print(f"ERROR - Exception type: {type(e)}")
+        import traceback
+        print(f"ERROR - Full traceback: {traceback.format_exc()}")
         return serve_html_with_error(f"Failed to get access token: {str(e)}")
     
     if is_relogin:
