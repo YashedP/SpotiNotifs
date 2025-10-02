@@ -52,26 +52,56 @@
         button:hover {
             background-color: #1ed760;
         }
+        .form-section {
+            margin-bottom: 40px;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background-color: #fafafa;
+        }
+        .form-section h2 {
+            color: #333;
+            margin-top: 0;
+            margin-bottom: 20px;
+            font-size: 18px;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🎵 Spotify New Music</h1>
-        <form action="/auth" method="POST">
-            <div class="form-group">
-                <label for="username">Enter your username:</label>
-                <input type="text" id="username" name="username" required placeholder="Your username">
-            </div>
-            <div class="form-group">
-                <label for="discord_username">Enter your Discord username:</label>
-                <input type="text" id="discord_username" name="discord_username" required placeholder="Your Discord username">
-            </div>
-            <div class="form-group">
-                <label for="want_playlist">Automatically create a playlist for all newly released songs from your followed artists</label>
-                <input type="checkbox" id="want_playlist" name="want_playlist" required>
-            </div>
-            <button type="submit">Continue to Spotify</button>
-        </form>
+        
+        <!-- New User Form -->
+        <div class="form-section">
+            <h2>New User Registration</h2>
+            <form action="/auth" method="POST">
+                <div class="form-group">
+                    <label for="username">Enter your username:</label>
+                    <input type="text" id="username" name="username" required placeholder="Your username">
+                </div>
+                <div class="form-group">
+                    <label for="discord_username">Enter your Discord username:</label>
+                    <input type="text" id="discord_username" name="discord_username" required placeholder="Your Discord username">
+                </div>
+                <div class="form-group">
+                    <label for="want_playlist">Automatically create a playlist for all newly released songs from your followed artists</label>
+                    <input type="checkbox" id="want_playlist" name="want_playlist" required>
+                </div>
+                <button type="submit">Continue to Spotify</button>
+            </form>
+        </div>
+        
+        <!-- Existing User Re-authentication Form -->
+        <div class="form-section">
+            <h2>Existing User Re-authentication</h2>
+            <form action="/relogin" method="POST">
+                <div class="form-group">
+                    <label for="relogin_username">Enter your username to re-authenticate with Spotify:</label>
+                    <input type="text" id="relogin_username" name="username" required placeholder="Your username">
+                </div>
+                <button type="submit">Re-authenticate with Spotify</button>
+            </form>
+        </div>
     </div>
 </body>
 </html>

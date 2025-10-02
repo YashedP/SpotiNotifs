@@ -145,11 +145,27 @@ def update_user_refresh_token(user: User, refresh_token: str) -> None:
         cursor = conn.cursor()
         cursor.execute("UPDATE users SET refresh_token = ? WHERE user_UUID = ?", (refresh_token, user.user_UUID))
         conn.commit()
+        conn.close()
     except Exception as e:
         if conn:
             conn.close()
         print(f"Error updating user refresh token: {e}")
         raise
+
+def update_user_refresh_token_by_id(user_id: str, refresh_token: str) -> bool:
+    """Update refresh token by user UUID"""
+    try:
+        conn = connect(USERS_DB)
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET refresh_token = ? WHERE user_UUID = ?", (refresh_token, user_id))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception as e:
+        if conn:
+            conn.close()
+        print(f"Error updating user refresh token by ID: {e}")
+        return False
 
 def update_user_discord_id(user: User, discord_id: str) -> None:
     try:
