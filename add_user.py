@@ -103,8 +103,6 @@ def callback():
     user_data = users[user_UUID]
     del users[user_UUID]
     username = user_data['username']
-    discord_username = user_data['discord_username']
-    want_playlist = user_data['want_playlist']
     is_relogin = user_data.get('is_relogin', False)
     existing_user_id = user_data.get('existing_user_id')
     
@@ -118,7 +116,9 @@ def callback():
         else:
             return serve_html_with_error(f"Failed to update user {username}")
     else:
-        # Create new user
+        discord_username = user_data['discord_username']
+        want_playlist = user_data['want_playlist']
+        
         user = sql.User(user_UUID, username, discord_username, refresh_token)
         if want_playlist:
             user.access_token = OAuth2.refresh_access_token(refresh_token)['access_token']
