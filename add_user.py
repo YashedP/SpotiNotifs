@@ -90,44 +90,87 @@ def relogin():
 
 @app.route('/callback')
 def callback():
+    print("=== CALLBACK FUNCTION STARTED ===")
+    
     authCode = request.args.get('code')
     user_UUID = request.args.get('state')
     error = request.args.get('error')
     
+    print(f"DEBUG - authCode: {authCode}")
+    print(f"DEBUG - user_UUID: {user_UUID}")
+    print(f"DEBUG - error: {error}")
+    print(f"DEBUG - All request args: {dict(request.args)}")
+    
     if error:
+        print(f"ERROR in callback: {error}")
         return serve_html_with_error(error)
     
     if user_UUID not in users:
+        print(f"ERROR - User UUID {user_UUID} not found in users dict")
+        print(f"DEBUG - Available users: {list(users.keys())}")
         return serve_html_with_error("User not found")
     
+    print(f"DEBUG - Found user in users dict: {user_UUID}")
     user_data = users[user_UUID]
+    print(f"DEBUG - User data: {user_data}")
     del users[user_UUID]
     username = user_data['username']
     is_relogin = user_data.get('is_relogin', False)
     existing_user_id = user_data.get('existing_user_id')
     
-    response = OAuth2.get_access_token(authCode)
-    refresh_token = response['refresh_token']
+    print(f"DEBUG - username: {username}")
+    print(f"DEBUG - is_relogin: {is_relogin}")
+    print(f"DEBUG - existing_user_id: {existing_user_id}")
+    
+    print("DEBUG - About to call OAuth2.get_access_token")
+    try:
+        response = OAuth2.get_access_token(authCode)
+        print(f"DEBUG - OAuth2 response: {response}")
+        refresh_token = response['refresh_token']
+        print(f"DEBUG - refresh_token: {refresh_token}")
+    except Exception as e:
+        print(f"ERROR - Failed to get access token: {e}")
+        return serve_html_with_error(f"Failed to get access token: {str(e)}")
     
     if is_relogin:
+        print("DEBUG - Processing relogin flow")
         # Update existing user's refresh token
+        print(f"DEBUG - About to update refresh token for user ID: {existing_user_id}")
         if sql.update_user_refresh_token_by_id(existing_user_id, refresh_token):
+            print(f"DEBUG - Successfully updated refresh token for user: {username}")
             return serve_html_with_error(f"Successfully re-authenticated user: {username}")
         else:
+            print(f"ERROR - Failed to update refresh token for user: {username}")
             return serve_html_with_error(f"Failed to update user {username}")
     else:
+        print("DEBUG - Processing new user flow")
         discord_username = user_data['discord_username']
         want_playlist = user_data['want_playlist']
         
-        user = sql.User(user_UUID, username, discord_username, refresh_token)
-        if want_playlist:
-            user.access_token = OAuth2.refresh_access_token(refresh_token)['access_token']
-            playlist_id = asyncio.run(spotify.create_playlist(user))
-            user.playlist_id = playlist_id
+        print(f"DEBUG - discord_username: {discord_username}")
+        print(f"DEBUG - want_playlist: {want_playlist}")
         
+        user = sql.User(user_UUID, username, discord_username, refresh_token)
+        print(f"DEBUG - Created user object: {user}")
+        
+        if want_playlist:
+            print("DEBUG - User wants playlist, getting access token and creating playlist")
+            try:
+                user.access_token = OAuth2.refresh_access_token(refresh_token)['access_token']
+                print(f"DEBUG - Got access token: {user.access_token[:20]}...")
+                playlist_id = asyncio.run(spotify.create_playlist(user))
+                print(f"DEBUG - Created playlist with ID: {playlist_id}")
+                user.playlist_id = playlist_id
+            except Exception as e:
+                print(f"ERROR - Failed to create playlist: {e}")
+                return serve_html_with_error(f"Failed to create playlist: {str(e)}")
+        
+        print("DEBUG - About to add user to database")
         if sql.add_user(user):
+            print(f"DEBUG - Successfully added user: {username}")
             return serve_html_with_error(f"Successfully authenticated user: {username} with Discord: {discord_username}")
         else:
+            print(f"ERROR - User {username} already exists")
             return serve_html_with_error(f"User {username} already exists")
 
 if __name__ == '__main__':
