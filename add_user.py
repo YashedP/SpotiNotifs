@@ -68,8 +68,6 @@ def relogin():
     user_UUID = str(uuid.uuid4())
     users[user_UUID] = {
         'username': username, 
-        'discord_username': existing_user.discord_username, 
-        'want_playlist': existing_user.playlist_id is not None,
         'is_relogin': True,
         'existing_user_id': existing_user.user_UUID
     }
