@@ -1,10 +1,11 @@
 from dotenv import load_dotenv
-from flask import Flask, redirect, request
+from flask import Flask, redirect, request, send_file, url_for
 import uuid
 import sql
 import OAuth2
 import spotify
 import asyncio
+import os
 
 app = Flask(__name__)
 load_dotenv()
@@ -13,87 +14,25 @@ users = {}
 
 sql.init_db()
 
+def serve_html_with_error(error=None):
+    """Serve index.html with optional error message"""
+    try:
+        with open('index.html', 'r', encoding='utf-8') as f:
+            html_content = f.read()
+        
+        if error:
+            # Add error message to the HTML
+            error_html = f'<div style="color: red; margin-bottom: 20px; padding: 10px; background-color: #ffe6e6; border: 1px solid #ff9999; border-radius: 5px;">{error}</div>'
+            # Insert error message after the h1 tag
+            html_content = html_content.replace('<h1>🎵 Spotify New Music</h1>', f'<h1>🎵 Spotify New Music</h1>\n{error_html}')
+        
+        return html_content
+    except FileNotFoundError:
+        return "HTML file not found", 404
+
 @app.route('/')
 def index():
-    return '''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Spotify New Music</title>
-        <style>
-            body {
-                font-family: Arial, sans-serif;
-                max-width: 400px;
-                margin: 50px auto;
-                padding: 20px;
-                background-color: #f5f5f5;
-            }
-            .container {
-                background: white;
-                padding: 30px;
-                border-radius: 10px;
-                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            }
-            h1 {
-                color: #1DB954;
-                text-align: center;
-                margin-bottom: 30px;
-            }
-            .form-group {
-                margin-bottom: 20px;
-            }
-            label {
-                display: block;
-                margin-bottom: 5px;
-                font-weight: bold;
-                color: #333;
-            }
-            input[type="text"] {
-                width: 100%;
-                padding: 10px;
-                border: 1px solid #ddd;
-                border-radius: 5px;
-                font-size: 16px;
-                box-sizing: border-box;
-            }
-            button {
-                width: 100%;
-                padding: 12px;
-                background-color: #1DB954;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                font-size: 16px;
-                cursor: pointer;
-                transition: background-color 0.3s;
-            }
-            button:hover {
-                background-color: #1ed760;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>🎵 Spotify New Music</h1>
-            <form action="/auth" method="POST">
-                <div class="form-group">
-                    <label for="username">Enter your username:</label>
-                    <input type="text" id="username" name="username" required placeholder="Your username">
-                </div>
-                <div class="form-group">
-                    <label for="discord_username">Enter your Discord username:</label>
-                    <input type="text" id="discord_username" name="discord_username" required placeholder="Your Discord username">
-                </div>
-                <div class="form-group">
-                    <label for="want_playlist">Automatically create a playlist for all newly released songs from your followed artists</label>
-                    <input type="checkbox" id="want_playlist" name="want_playlist" required>
-                </div>
-                <button type="submit">Continue to Spotify</button>
-            </form>
-        </div>
-    </body>
-    </html>
-    '''
+    return serve_html_with_error()
 
 @app.route('/auth', methods=['POST'])
 def auth():
@@ -101,7 +40,7 @@ def auth():
     discord_username = request.form.get('discord_username')
     want_playlist = request.form.get('want_playlist')
     if not username or not discord_username:
-        return redirect('/')
+        return serve_html_with_error("Username and Discord username are required")
     
     user_UUID = str(uuid.uuid4())
     users[user_UUID] = {'username': username, 'discord_username': discord_username.lower(), 'want_playlist': want_playlist}
@@ -121,10 +60,10 @@ def callback():
     error = request.args.get('error')
     
     if error:
-        return f"Error: {error}"
+        return serve_html_with_error(error)
     
     if user_UUID not in users:
-        return f"User not found"
+        return serve_html_with_error("User not found")
     
     user_data = users[user_UUID]
     del users[user_UUID]
@@ -142,9 +81,9 @@ def callback():
         user.playlist_id = playlist_id
     
     if sql.add_user(user):
-        return f"Successfully authenticated user: {username} with Discord: {discord_username}"
+        return serve_html_with_error(f"Successfully authenticated user: {username} with Discord: {discord_username}")
     else:
-        return f"User {username} already exists"
+        return serve_html_with_error(f"User {username} already exists")
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
