@@ -71,7 +71,7 @@ def relogin():
         'discord_username': existing_user.discord_username, 
         'want_playlist': existing_user.playlist_id is not None,
         'is_relogin': True,
-        'existing_user_id': existing_user.id
+        'existing_user_id': existing_user.user_UUID
     }
     
     auth_url = OAuth2.create_authorization_url(state=user_UUID)
