@@ -10,6 +10,14 @@ import os
 app = Flask(__name__)
 load_dotenv()
 
+# Debug: Check if environment variables are loaded
+print("Environment variables check:")
+print(f"clientId: {'✓' if os.getenv('clientId') else '✗'}")
+print(f"redirectUri: {'✓' if os.getenv('redirectUri') else '✗'}")
+print(f"clientSecret: {'✓' if os.getenv('clientSecret') else '✗'}")
+print(f"authorizationUrl: {'✓' if os.getenv('authorizationUrl') else '✗'}")
+print(f"tokenUrl: {'✓' if os.getenv('tokenUrl') else '✗'}")
+
 users = {}
 
 sql.init_db()
@@ -72,8 +80,13 @@ def relogin():
         'existing_user_id': existing_user.user_UUID
     }
     
-    auth_url = OAuth2.create_authorization_url(state=user_UUID)
-    return redirect(auth_url)
+    try:
+        auth_url = OAuth2.create_authorization_url(state=user_UUID)
+        print(f"Generated auth URL: {auth_url}")  # Debug print
+        return redirect(auth_url)
+    except Exception as e:
+        print(f"Error creating authorization URL: {e}")  # Debug print
+        return serve_html_with_error(f"Error creating authorization URL: {str(e)}")
 
 @app.route('/callback')
 def callback():
