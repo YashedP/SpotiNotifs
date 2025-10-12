@@ -21,5 +21,11 @@ def get_access_token(authCode: str) -> dict[str, str]:
     return token
 
 def refresh_access_token(refresh_token: str) -> dict[str, str]:
-    token = sp.refresh_token(tokenUrl, refresh_token=refresh_token, grant_type="refresh_token", client_secret=clientSecret)
+    sp_temp = OAuth2Session(client_id=clientId, client_secret=clientSecret)
+    token = sp_temp.refresh_token(
+        tokenUrl,
+        refresh_token=refresh_token,
+        grant_type="refresh_token",
+        timeout=10
+    )
     return token
