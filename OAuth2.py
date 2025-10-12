@@ -1,4 +1,5 @@
 import os
+import requests
 from dotenv import load_dotenv
 from authlib.integrations.requests_client import OAuth2Session
 
@@ -21,10 +22,14 @@ def get_access_token(authCode: str) -> dict[str, str]:
     return token
 
 def refresh_access_token(refresh_token: str) -> dict[str, str]:
-    sp_temp = OAuth2Session(client_id=clientId, client_secret=clientSecret)
-    token = sp_temp.refresh_token(
-        tokenUrl,
-        refresh_token=refresh_token,
-        timeout=10
-    )
-    return token
+    data = {
+        'grant_type': 'refresh_token',
+        'refresh_token': refresh_token,
+        'client_id': clientId,
+        'client_secret': clientSecret
+    }
+    
+    response = requests.post(tokenUrl, data=data, timeout=10)  # pyright: ignore[reportArgumentType]
+    response.raise_for_status()
+    
+    return response.json()
