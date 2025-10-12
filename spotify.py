@@ -107,20 +107,26 @@ def get_all_artists(user: sql.User) -> list[dict]:
     
     while True:
         try:
+            print("Getting artists")
             params = {
                 "type": "artist",
                 "limit": "50",
                 "after": next_cursor or ""
             }
+            print("Got params")
             response = spotify_request_sync(user, FOLLOWING_ARTISTS_URL, params)['artists']
+            print("Got response")
             artists.extend(response['items'])
             next_cursor = response['cursors']['after']
         except requests.exceptions.RequestException as e:
+            print("Got exception")
             print(f"Error requesting {FOLLOWING_ARTISTS_URL}: {e}")
             return artists
         if not next_cursor:
+            print("No next cursor")
             break
     
+    print("Returning artists")
     return artists
 
 async def get_all_albums(user: sql.User, artist_id: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore) -> list[str]:
