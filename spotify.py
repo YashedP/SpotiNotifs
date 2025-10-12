@@ -46,14 +46,19 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
                 return await response.json()
         except aiohttp.ClientResponseError as e:
             if e.status == 429:
-                seconds_to_wait = int(e.headers.get('Retry-After'))
+                seconds_to_wait = int(e.headers.get('Retry-After'))  # pyright: ignore[reportArgumentType, reportOptionalMemberAccess]
                 
                 print(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry...")
                 if seconds_to_wait > 60:
-                    await error_message(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry... for user {user.safe_str()}")
+                    await error_message(Exception(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry... for user {user.safe_str()}"))
                     sys.exit(1)
                 
                 await asyncio.sleep(seconds_to_wait)
+            elif e.status == 403:
+                error_msg = f"API call returned 403 Forbidden (Unauthorized) for user {user.safe_str()} at URL: {url}"
+                print(f"UNAUTHORIZED ACCESS: {error_msg}")
+                await error_message(Exception(error_msg))
+                sys.exit(1)
             else:
                 raise 
         attempts -= 1
@@ -77,17 +82,20 @@ def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] = {}, 
             return response.json()
         except requests.exceptions.RequestException as e:
             if hasattr(e, 'response') and e.response and e.response.status_code == 429:
-                seconds_to_wait = int(e.response.headers.get('Retry-After'))
+                retry_after = e.response.headers.get('Retry-After')
+                seconds_to_wait = int(retry_after) if retry_after else 0
                 
                 print(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry...")
                 if seconds_to_wait > 60:
-                    asyncio.run(error_message(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry... for user {user.safe_str()}"))
+                    asyncio.run(error_message(Exception(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry... for user {user.safe_str()}")))
                     sys.exit(1)
                 
                 time.sleep(seconds_to_wait)
+            elif hasattr(e, 'response') and e.response and e.response.status_code == 403:
+                error_msg = f"API call returned 403 Forbidden (Unauthorized) for user {user.safe_str()} at URL: {url}. Response: {e.response.text}"
+                asyncio.run(error_message(Exception(error_msg)))
+                sys.exit(1)
             else:
-                if hasattr(e, 'response') and e.response and e.response.status_code == 403:
-                    print(e.response.text)
                 raise e
         attempts -= 1
     return {}
@@ -214,7 +222,7 @@ async def add_to_playlist(user: sql.User, new_releases) -> None:
             body = {"uris": uris[i * BREAKPOINT : (i + 1) * BREAKPOINT]}
             spotify_request_sync(user, ADD_TO_PLAYLIST_URL.format(playlist_id=user.playlist_id), body=body, method="POST")
     except Exception as e:
-        await error_message(f"Error adding to playlist: {e}")
+        await error_message(Exception(f"Error adding to playlist: {e}"))
 
 async def new_releases(user: sql.User) -> str:
     token_info = OAuth2.refresh_access_token(user.refresh_token)
@@ -225,7 +233,7 @@ async def new_releases(user: sql.User) -> str:
     try:
         artists = get_all_artists(user)
     except Exception as e:
-        await error_message(f"Error requesting artists: {e}")
+        await error_message(Exception(f"Error requesting artists: {e}"))
         return "Error requesting artists"
     
     artists_ids = [(artist['id'], artist['name']) for artist in artists]
@@ -272,9 +280,13 @@ async def new_releases(user: sql.User) -> str:
         for result in results:
             if isinstance(result, Exception):
                 print(f"Error processing artist: {result}")
-                await error_message(f"Error processing artist: {result}")
+                await error_message(Exception(f"Error processing artist: {result}"))
                 continue
-            artist_name, new_songs = result
+            if isinstance(result, tuple) and len(result) == 2:
+                artist_name, new_songs = result
+            else:
+                print(f"Unexpected result format: {result}")
+                continue
             if new_songs:
                 new_releases[artist_name] = new_songs
     
@@ -321,7 +333,7 @@ async def process_user(user: sql.User):
         await send_message(user, str)
     except Exception as e:
         print(e)
-        await error_message(f"Error processing user: {user.safe_str()}")
+        await error_message(Exception(f"Error processing user: {user.safe_str()}"))
 
 @bot.event
 async def send_message(user: sql.User, message: str):
@@ -346,7 +358,7 @@ async def send_message(user: sql.User, message: str):
                     try:
                         sql.update_user_discord_id(user, str(member.id))
                     except Exception as e:
-                        await error_message(f"Error updating user discord ID: {e}")
+                        await error_message(Exception(f"Error updating user discord ID: {e}"))
                     for msg in messages:
                         await member.send(msg)
 
