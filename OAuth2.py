@@ -25,7 +25,6 @@ def refresh_access_token(refresh_token: str) -> dict[str, str]:
     token = sp_temp.refresh_token(
         tokenUrl,
         refresh_token=refresh_token,
-        grant_type="refresh_token",
         timeout=10
     )
     return token
