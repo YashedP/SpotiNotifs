@@ -228,7 +228,7 @@ async def add_to_playlist(user: sql.User, new_releases) -> None:
 async def new_releases(user: sql.User) -> str:
     print("Getting access token")
     token_info = OAuth2.refresh_access_token(user.refresh_token)
-    print("Got access token")
+    print("Got access token: " + token_info['access_token'])
     access_token = token_info['access_token']
     user.access_token = access_token
     print("Access token set")
