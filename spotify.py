@@ -59,6 +59,13 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
                 print(f"UNAUTHORIZED ACCESS: {error_msg}")
                 await error_message(Exception(error_msg))
                 sys.exit(1)
+            elif 500 <= e.status < 600:
+                # Handle 500-level server errors with exponential backoff
+                wait_time = (3 - attempts) * 2  # Exponential backoff: 2, 4 seconds
+                print(f"Server error ({e.status}) for {url}. Waiting {wait_time} seconds before retry...")
+                await asyncio.sleep(wait_time)
+                attempts -= 1
+                continue
             else:
                 raise 
         attempts -= 1
@@ -95,6 +102,13 @@ def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] = {}, 
                 error_msg = f"API call returned 403 Forbidden (Unauthorized) for user {user.safe_str()} at URL: {url}. Response: {e.response.text}"
                 asyncio.run(error_message(Exception(error_msg)))
                 sys.exit(1)
+            elif hasattr(e, 'response') and e.response and 500 <= e.response.status_code < 600:
+                # Handle 500-level server errors with exponential backoff
+                wait_time = (3 - attempts) * 2  # Exponential backoff: 2, 4 seconds
+                print(f"Server error ({e.response.status_code}) for {url}. Waiting {wait_time} seconds before retry...")
+                time.sleep(wait_time)
+                attempts -= 1
+                continue
             else:
                 raise e
         attempts -= 1
