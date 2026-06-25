@@ -4,5 +4,6 @@
 __pycache__
 .env
 users.db
+data
 logs.txt
 *.pyc

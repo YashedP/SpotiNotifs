@@ -21,5 +21,6 @@ make logs
 make restart
 ```
 
-The ignored `.env` and `users.db` files remain on the host and are mounted into
-the containers at runtime.
+The ignored `.env` and `data/users.db` files remain on the host and are mounted
+into the containers at runtime. Existing root-level `users.db` files are backed
+up and migrated into `data/` by `make setup`.

@@ -13,7 +13,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./users.db:/app/users.db
+      - ./data:/app/data
 
   notifier:
     build:
@@ -27,4 +27,4 @@ services:
     command: ["python", "spotify.py"]
     init: true
     volumes:
-      - ./users.db:/app/users.db
+      - ./data:/app/data

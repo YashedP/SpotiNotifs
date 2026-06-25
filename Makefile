@@ -3,6 +3,7 @@ SHELL := /bin/bash
 SERVICE_NAME := spotinotifs.service
 TIMER_NAME := spotinotifs-notifier.timer
 INSTALL_SCRIPT := deploy/install-systemd.sh
+MIGRATE_SCRIPT := deploy/migrate-data.sh
 
 .PHONY: help setup install run start stop restart status logs uninstall
 
@@ -21,12 +22,14 @@ help:
 setup:
 	@command -v docker >/dev/null || { echo "docker is required"; exit 1; }
 	@test -f .env || { echo "Missing .env"; exit 1; }
-	@test -e users.db || install -m 0600 /dev/null users.db
+	./$(MIGRATE_SCRIPT)
 	docker compose build
 	docker compose run --rm --no-deps server python -c \
 		"from pathlib import Path; [compile(path.read_text(), str(path), 'exec') for path in map(Path, ('OAuth2.py', 'add_user.py', 'spotify.py', 'sql.py'))]"
 
-install: setup
+install:
+	-@sudo systemctl stop "$(TIMER_NAME)" "$(SERVICE_NAME)"
+	@$(MAKE) setup
 	./$(INSTALL_SCRIPT)
 
 run:
