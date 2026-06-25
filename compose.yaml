@@ -1,0 +1,30 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      HOME: /tmp
+    env_file:
+      - .env
+    command: ["gunicorn", "--bind", "0.0.0.0:5000", "add_user:app"]
+    init: true
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./users.db:/app/users.db
+
+  notifier:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      HOME: /tmp
+    env_file:
+      - .env
+    command: ["python", "spotify.py"]
+    init: true
+    volumes:
+      - ./users.db:/app/users.db

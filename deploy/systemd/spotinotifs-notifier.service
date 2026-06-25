@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the SpotiNotifs notifier
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@PROJECT_DIR@
+ExecStart=/usr/bin/docker compose run --rm notifier

@@ -1,5 +1,8 @@
-.env
+.git
+.gitignore
 .venv
 __pycache__
+.env
 users.db
 logs.txt
+*.pyc

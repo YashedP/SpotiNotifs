@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the SpotiNotifs notifier twice daily
+
+[Timer]
+OnCalendar=*-*-* 00:03:00
+OnCalendar=*-*-* 23:30:00
+Persistent=true
+Unit=spotinotifs-notifier.service
+
+[Install]
+WantedBy=timers.target

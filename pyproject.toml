@@ -22,6 +22,7 @@ dependencies = [
     "dotenv==0.9.9",
     "flask==3.1.1",
     "frozenlist==1.7.0",
+    "gunicorn>=23,<24",
     "idna==3.10",
     "itsdangerous==2.2.0",
     "jinja2==3.1.6",
