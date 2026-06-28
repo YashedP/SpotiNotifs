@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 from flask import Flask, redirect, request
+import os
 import uuid
 import sql
 import OAuth2
@@ -12,6 +13,10 @@ load_dotenv()
 users = {}
 
 sql.init_db()
+
+@app.route('/health')
+def health():
+    return "ok\n", 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 @app.route('/')
 def index():
@@ -147,4 +152,4 @@ def callback():
         return f"User {username} already exists"
 
 if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0', port=5000)
+    app.run(debug=False, host='0.0.0.0', port=int(os.getenv("PORT", "5000")))

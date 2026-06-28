@@ -6,25 +6,23 @@ services:
     user: "${UID:-1000}:${GID:-1000}"
     environment:
       HOME: /tmp
+      PORT: "80"
     env_file:
       - .env
-    command: ["gunicorn", "--bind", "0.0.0.0:5000", "add_user:app"]
+    command: ["gunicorn", "--bind", "0.0.0.0:80", "add_user:app"]
     init: true
-    ports:
-      - "5000:5000"
+    expose:
+      - "80"
     volumes:
-      - ./data:/app/data
+      - spotinotifs_data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1/health').read()"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
-  notifier:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    user: "${UID:-1000}:${GID:-1000}"
-    environment:
-      HOME: /tmp
-    env_file:
-      - .env
-    command: ["python", "spotify.py"]
-    init: true
-    volumes:
-      - ./data:/app/data
+volumes:
+  spotinotifs_data:
+    name: spotinotifs_data
