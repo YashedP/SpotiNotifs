@@ -6,9 +6,12 @@ import sql
 import OAuth2
 import spotify
 import asyncio
+from logging_config import configure_logging, get_logger
 
 app = Flask(__name__)
 load_dotenv()
+configure_logging(service="server")
+logger = get_logger(__name__)
 
 users = {}
 
@@ -106,6 +109,7 @@ def auth():
     discord_username = request.form.get('discord_username')
     want_playlist = request.form.get('want_playlist')
     if not username or not discord_username:
+        logger.info("Auth form missing required fields", extra={"event": "web_auth_form_invalid"})
         return redirect('/')
     
     user_UUID = str(uuid.uuid4())
@@ -116,7 +120,21 @@ def auth():
     else:
         want_playlist = False
 
+    logger.info(
+        "Auth form submitted",
+        extra={
+            "event": "web_auth_form_submitted",
+            "user_uuid": user_UUID,
+            "username": username,
+            "discord_username": discord_username.lower(),
+            "want_playlist": want_playlist,
+        },
+    )
     auth_url = OAuth2.create_authorization_url(state=user_UUID)
+    logger.info(
+        "Redirecting user to Spotify OAuth",
+        extra={"event": "web_oauth_redirect_created", "user_uuid": user_UUID, "username": username},
+    )
     return redirect(auth_url)
 
 @app.route('/callback')
@@ -126,9 +144,11 @@ def callback():
     error = request.args.get('error')
     
     if error:
+        logger.info("OAuth callback returned an error", extra={"event": "web_oauth_callback_error", "oauth_error": error})
         return f"Error: {error}"
     
     if user_UUID not in users:
+        logger.info("OAuth callback state was not found", extra={"event": "web_oauth_callback_state_missing", "user_uuid": user_UUID})
         return f"User not found"
     
     user_data = users[user_UUID]
@@ -142,13 +162,17 @@ def callback():
     
     user = sql.User(user_UUID, username, discord_username, refresh_token)
     if want_playlist:
+        logger.info("Creating signup playlist", extra={"event": "web_signup_playlist_create_started", **user.log_context()})
         user.access_token = OAuth2.refresh_access_token(refresh_token)['access_token']
         playlist_id = asyncio.run(spotify.create_playlist(user))
         user.playlist_id = playlist_id
+        logger.info("Created signup playlist", extra={"event": "web_signup_playlist_create_succeeded", **user.log_context()})
     
     if sql.add_user(user):
+        logger.info("OAuth callback completed", extra={"event": "web_oauth_callback_succeeded", **user.log_context()})
         return f"Successfully authenticated user: {username} with Discord: {discord_username}"
     else:
+        logger.info("OAuth callback found duplicate user", extra={"event": "web_oauth_callback_duplicate_user", **user.log_context()})
         return f"User {username} already exists"
 
 if __name__ == '__main__':

@@ -39,16 +39,23 @@ The Compose file uses `expose` instead of host `ports`, so Traefik routes to the
 
 ## Notifier schedule
 
-Use Dokploy Schedule Jobs instead of systemd timers.
+Use Dokploy Server Jobs instead of Compose Jobs or systemd timers. Dokploy Compose Jobs execute commands inside an existing service container, which makes notifier output show up as Dokploy schedule logs. Server Jobs should launch the dedicated `notifier` Compose service as a one-off container so Docker, Vector, and VictoriaLogs see normal container stdout/stderr logs.
 
-Create two Compose Jobs against this Compose resource:
+Create two Server Jobs:
 
-| Schedule | Service | Command |
+| Schedule | Command |
+| --- | --- |
+| `3 0 * * *` | `cd /etc/dokploy/compose/spotinotifs-service-lx3tci/code && docker compose -f compose.yaml run --no-deps notifier` |
+| `30 23 * * *` | `cd /etc/dokploy/compose/spotinotifs-service-lx3tci/code && docker compose -f compose.yaml run --no-deps notifier` |
+
+Update the path if Dokploy shows a different Compose directory. These jobs reuse the same image, environment, and `spotinotifs_data` volume as the web service, but run with `SERVICE_NAME=notifier` for logs.
+
+Logs are always emitted as newline-delimited JSON to stdout. Optional logging env vars:
+
+| Variable | Default | Note |
 | --- | --- | --- |
-| `3 0 * * *` | `server` | `python spotify.py` |
-| `30 23 * * *` | `server` | `python spotify.py` |
-
-These jobs reuse the same image, environment, and `spotinotifs_data` volume as the web service.
+| `LOG_LEVEL` | `INFO` | Python logging level |
+| `SERVICE_NAME` | Compose-defined | `server` or `notifier` |
 
 ## One-time volume migration
 
@@ -112,6 +119,7 @@ users.db
 ```bash
 docker compose build
 docker compose up server
+docker compose run --no-deps notifier
 ```
 
 Useful legacy systemd commands are still available while the old deployment exists:
