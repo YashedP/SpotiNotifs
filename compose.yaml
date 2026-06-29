@@ -6,6 +6,7 @@ services:
     user: "${UID:-1000}:${GID:-1000}"
     environment:
       HOME: /tmp
+      SERVICE_NAME: server
       PORT: "80"
     env_file:
       - .env
@@ -22,6 +23,24 @@ services:
       timeout: 3s
       retries: 5
       start_period: 10s
+
+  notifier:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      HOME: /tmp
+      SERVICE_NAME: notifier
+    env_file:
+      - .env
+    command: ["python", "spotify.py"]
+    init: true
+    volumes:
+      - spotinotifs_data:/app/data
+    profiles:
+      - jobs
+    restart: "no"
 
 volumes:
   spotinotifs_data:
