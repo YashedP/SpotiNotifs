@@ -50,12 +50,11 @@ Create two Server Jobs:
 
 Update the path if Dokploy shows a different Compose directory. These jobs reuse the same image, environment, and `spotinotifs_data` volume as the web service, but run with `SERVICE_NAME=notifier` for logs.
 
-Structured JSON logs are enabled by default. Optional logging env vars:
+Logs are always emitted as newline-delimited JSON to stdout. Optional logging env vars:
 
 | Variable | Default | Note |
 | --- | --- | --- |
 | `LOG_LEVEL` | `INFO` | Python logging level |
-| `LOG_FORMAT` | `json` | Set to `text` for local plain-text logs |
 | `SERVICE_NAME` | Compose-defined | `server` or `notifier` |
 
 ## One-time volume migration

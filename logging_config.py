@@ -77,33 +77,13 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str, separators=(",", ":"))
 
 
-class TextFormatter(logging.Formatter):
-    def __init__(self, service: str, run_id: str) -> None:
-        super().__init__("%(asctime)s %(levelname)s %(name)s service=%(service)s run_id=%(run_id)s event=%(event)s %(message)s")
-        self.service = service
-        self.run_id = run_id
-
-    def format(self, record: logging.LogRecord) -> str:
-        if not hasattr(record, "service"):
-            record.service = self.service
-        if not hasattr(record, "run_id"):
-            record.run_id = self.run_id
-        if not hasattr(record, "event"):
-            record.event = None
-        return super().format(record)
-
-
 def configure_logging(service: str | None = None, run_id: str | None = None) -> str:
     service_name = service or infer_service_name()
     current_run_id = run_id or DEFAULT_RUN_ID
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
-    log_format = os.getenv("LOG_FORMAT", "json").lower()
 
     handler = logging.StreamHandler(sys.stdout)
-    if log_format == "json":
-        handler.setFormatter(JsonFormatter(service_name, current_run_id))
-    else:
-        handler.setFormatter(TextFormatter(service_name, current_run_id))
+    handler.setFormatter(JsonFormatter(service_name, current_run_id))
 
     root = logging.getLogger()
     root.handlers.clear()
