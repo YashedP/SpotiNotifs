@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 from authlib.integrations.requests_client import OAuth2Session
-from observability import configure_logging, get_logger
+from logging_config import configure_logging, get_logger
 
 load_dotenv()
 configure_logging()

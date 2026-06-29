@@ -12,7 +12,7 @@ import asyncio
 import sys
 from urllib.parse import urlparse
 
-from observability import configure_logging, get_logger
+from logging_config import configure_logging, get_logger
 
 load_dotenv()
 RUN_ID = configure_logging(service=os.getenv("SERVICE_NAME", "notifier"))

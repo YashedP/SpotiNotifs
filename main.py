@@ -1,4 +1,4 @@
-from observability import configure_logging, get_logger
+from logging_config import configure_logging, get_logger
 
 configure_logging()
 logger = get_logger(__name__)

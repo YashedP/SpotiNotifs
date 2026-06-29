@@ -6,7 +6,7 @@ import sql
 import OAuth2
 import spotify
 import asyncio
-from observability import configure_logging, get_logger
+from logging_config import configure_logging, get_logger
 
 app = Flask(__name__)
 load_dotenv()
