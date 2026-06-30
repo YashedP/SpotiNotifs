@@ -32,6 +32,7 @@ services:
     environment:
       HOME: /tmp
       SERVICE_NAME: notifier
+      TZ: America/New_York
     env_file:
       - .env
     command: ["python", "spotify.py"]
