@@ -83,6 +83,7 @@ def index():
     <body>
         <div class="container">
             <h1>🎵 Spotify New Music</h1>
+            <p>Already registered? Enter the same username to reconnect Spotify without losing your settings.</p>
             <form action="/auth" method="POST">
                 <div class="form-group">
                     <label for="username">Enter your username:</label>
@@ -159,6 +160,12 @@ def callback():
     
     response = OAuth2.get_access_token(authCode)
     refresh_token = response['refresh_token']
+
+    existing_user = sql.get_user_by_username(username)
+    if existing_user:
+        sql.update_user_refresh_token(existing_user, refresh_token)
+        logger.info("OAuth reauthorization completed", extra={"event": "web_oauth_reauthorization_succeeded", **existing_user.log_context()})
+        return f"Successfully reauthenticated user: {username}"
     
     user = sql.User(user_UUID, username, discord_username, refresh_token)
     if want_playlist:
