@@ -1,17 +1,24 @@
-import sql
-import OAuth2
-import aiohttp
-import requests
-from typing import Any
-from datetime import datetime, timedelta
-import discord
-from dotenv import load_dotenv
-import os
-import time
 import asyncio
+import os
 import sys
+import time
+from datetime import datetime, timedelta
+from typing import Any
 from urllib.parse import urlparse
 
+import aiohttp
+import discord
+import requests
+from dotenv import load_dotenv
+
+import anchor
+import OAuth2
+import sql
+from anchor_credentials import (
+    CredentialConfigurationError,
+    CredentialDecryptionError,
+    decrypt_api_key,
+)
 from logging_config import configure_logging, get_logger
 
 load_dotenv()
@@ -19,11 +26,13 @@ RUN_ID = configure_logging(service=os.getenv("SERVICE_NAME", "notifier"))
 logger = get_logger(__name__)
 
 DISCORD_TOKEN = os.getenv("discord_token")
+# SpotiNotifs only sends text DMs and never initializes Discord voice support.
+discord.VoiceClient.warn_nacl = False
 bot = discord.Client(intents=discord.Intents.all())
 OWNER_DISCORD_USERNAME = os.getenv("owner_discord_username")
 SPOTIFY_SEMAPHORE = asyncio.Semaphore(1)
 BREAKPOINT = 100
-is_new_day = True if datetime.now().hour < 12 else False
+is_new_day = datetime.now().hour < 12
 catchup = False
 catchup_days = []
 notifier_started_at = time.monotonic()
@@ -245,7 +254,7 @@ def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] | None
                         **user_log_context(user),
                     },
                 )
-                raise e
+                raise
         attempts -= 1
     logger.error(
         "Spotify request exhausted retries",
@@ -267,7 +276,7 @@ def get_all_artists(user: sql.User) -> list[dict]:
             response = spotify_request_sync(user, FOLLOWING_ARTISTS_URL, params)['artists']
             artists.extend(response['items'])
             next_cursor = response['cursors']['after']
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.RequestException:
             logger.exception("Error requesting followed artists", extra={"event": "spotify_followed_artists_failed", **user_log_context(user)})
             return artists
         if not next_cursor:
@@ -364,7 +373,7 @@ async def add_to_playlist(user: sql.User, new_releases) -> None:
             sql.update_user_playlist_id(user, user.playlist_id)
 
         uris = []
-        for _, songs in new_releases.items():
+        for songs in new_releases.values():
             for song in songs.values():
                 link = song['id']
                 response = spotify_request_sync(user, ALBUM_URL.format(album_id=link))
@@ -389,7 +398,7 @@ async def add_to_playlist(user: sql.User, new_releases) -> None:
         logger.exception("Playlist update failed", extra={"event": "playlist_update_failed", "release_count": release_count, **user_log_context(user)})
         await error_message(Exception(f"Error adding to playlist: {e}"))
 
-async def new_releases(user: sql.User) -> tuple[str, int]:
+async def new_releases(user: sql.User) -> tuple[str, int, anchor.AnchorNotification | None]:
     logger.info("Refreshing Spotify token for user", extra={"event": "spotify_refresh_token_started", **user_log_context(user)})
     try:
         token_info = OAuth2.refresh_access_token(user.refresh_token)
@@ -406,7 +415,7 @@ async def new_releases(user: sql.User) -> tuple[str, int]:
     except Exception as e:
         logger.exception("Error requesting artists", extra={"event": "spotify_artists_request_failed", **user_log_context(user)})
         await error_message(Exception(f"Error requesting artists: {e}"))
-        return "Error requesting artists", 0
+        return "Error requesting artists", 0, None
     
     artists_ids = [(artist['id'], artist['name']) for artist in artists]
     logger.info("Starting artist processing", extra={"event": "artist_processing_started", "artist_count": len(artists_ids), **user_log_context(user)})
@@ -501,9 +510,121 @@ async def new_releases(user: sql.User) -> tuple[str, int]:
             message += f"No new releases today! {datetime.now().strftime('%m/%d')}\n\n"
         else:
             message += f"No strays today! {datetime.now().strftime('%m/%d')}\n\n"
-    return message, release_count
+    return message, release_count, build_anchor_notification(user, new_releases, release_count)
 
-async def process_user(user: sql.User) -> tuple[bool, int]:
+
+def build_anchor_notification(
+    user: sql.User,
+    releases: dict[str, dict[str, dict[str, Any]]],
+    release_count: int,
+) -> anchor.AnchorNotification:
+    today = datetime.now().strftime('%m/%d')
+    if catchup and catchup_days:
+        title = f"Spotify New Releases {catchup_days[0].strftime('%m/%d')}-{catchup_days[-1].strftime('%m/%d')}"
+    elif is_new_day:
+        title = f"Spotify New Releases {today}"
+    else:
+        title = f"Spotify Strays {today}"
+
+    if not releases:
+        if is_new_day:
+            message = f"No new releases today! {today}"
+        else:
+            message = f"No strays today! {today}"
+        return anchor.AnchorNotification(title=title, message=message)
+
+    full_lines: list[str] = []
+    compact_rows: list[str] = []
+    for artist, songs in releases.items():
+        full_lines.append(artist)
+        for song in songs.values():
+            song_name = str(song['name'])
+            spotify_url = str(song['external_urls']['spotify'])
+            full_lines.append(f"- {song_name}: {spotify_url}")
+            compact_rows.append(f"{artist} - {song_name}")
+        full_lines.append("")
+    full_message = "\n".join(full_lines).rstrip()
+
+    if len(full_message) <= anchor.MAX_ANCHOR_MESSAGE_CHARACTERS:
+        message = full_message
+    else:
+        message = compact_anchor_summary(release_count, len(releases), compact_rows)
+
+    source_url = None
+    source_label = None
+    if user.playlist_id:
+        source_url = f"https://open.spotify.com/playlist/{user.playlist_id}"
+        source_label = "Open SpotiNotif playlist"
+    return anchor.AnchorNotification(
+        title=title,
+        message=message,
+        source_url=source_url,
+        source_label=source_label,
+    )
+
+
+def compact_anchor_summary(release_count: int, artist_count: int, rows: list[str]) -> str:
+    summary = f"{release_count} new releases from {artist_count} artists."
+    included_rows: list[str] = []
+    for index, row in enumerate(rows):
+        remaining = len(rows) - index - 1
+        suffix = f"\n+{remaining} more. Full list was sent on Discord." if remaining else ""
+        candidate = "\n".join([summary, *included_rows, row]) + suffix
+        if len(candidate) > anchor.MAX_ANCHOR_MESSAGE_CHARACTERS:
+            break
+        included_rows.append(row)
+
+    omitted = len(rows) - len(included_rows)
+    result = "\n".join([summary, *included_rows])
+    if omitted:
+        result += f"\n+{omitted} more. Full list was sent on Discord."
+    return result[:anchor.MAX_ANCHOR_MESSAGE_CHARACTERS]
+
+
+async def send_anchor_notification(user: sql.User, notification: anchor.AnchorNotification) -> str:
+    if not user.anchor_api_key_ciphertext:
+        logger.info(
+            "Anchor notification skipped",
+            extra={"event": "anchor_notification_skipped", "reason": "not_configured", **user_log_context(user)},
+        )
+        return "skipped"
+
+    try:
+        api_key = decrypt_api_key(user.anchor_api_key_ciphertext)
+        await anchor.create_notification(user.user_UUID, api_key, notification)
+        logger.info(
+            "Anchor notification created",
+            extra={"event": "anchor_notification_succeeded", **user_log_context(user)},
+        )
+        return "succeeded"
+    except (CredentialConfigurationError, CredentialDecryptionError) as error:
+        logger.error(
+            "Anchor credential is unavailable",
+            extra={
+                "event": "anchor_notification_failed",
+                "reason": type(error).__name__,
+                **user_log_context(user),
+            },
+        )
+    except anchor.AnchorDeliveryError as error:
+        logger.warning(
+            "Anchor notification delivery failed",
+            extra={
+                "event": "anchor_notification_failed",
+                "reason": "request_failed",
+                "status_code": error.status_code,
+                **user_log_context(user),
+            },
+        )
+    except Exception:
+        logger.exception(
+            "Unexpected Anchor notification failure",
+            extra={"event": "anchor_notification_failed", "reason": "unexpected_error", **user_log_context(user)},
+        )
+    return "failed"
+
+
+async def process_user(user: sql.User) -> tuple[bool, int, str]:
     user_started_at = time.monotonic()
     logger.info("User processing started", extra={"event": "user_processing_started", **user_log_context(user)})
     if catchup:
@@ -515,8 +636,12 @@ async def process_user(user: sql.User) -> tuple[bool, int]:
             await send_message(user, "Catching up on any strays from today!")
     
     try:
-        message, release_count = await new_releases(user)
+        message, release_count, anchor_notification = await new_releases(user)
         await send_message(user, message)
+        if anchor_notification is None:
+            anchor_status = "not_attempted"
+        else:
+            anchor_status = await send_anchor_notification(user, anchor_notification)
         logger.info(
             "User processing finished",
             extra={
@@ -524,11 +649,12 @@ async def process_user(user: sql.User) -> tuple[bool, int]:
                 "status": "succeeded",
                 "duration_seconds": round(time.monotonic() - user_started_at, 3),
                 "new_release_count": release_count,
+                "anchor_status": anchor_status,
                 **user_log_context(user),
             },
         )
-        return True, release_count
-    except Exception as e:
+        return True, release_count, anchor_status
+    except Exception:
         logger.exception(
             "User processing failed",
             extra={
@@ -539,7 +665,7 @@ async def process_user(user: sql.User) -> tuple[bool, int]:
             },
         )
         await error_message(Exception(f"Error processing user: {user.safe_str()}"))
-        return False, 0
+        return False, 0, "not_attempted"
 
 @bot.event
 async def send_message(user: sql.User, message: str):
@@ -563,7 +689,7 @@ async def send_message(user: sql.User, message: str):
             logger.warning("Discord user ID not found", extra={"event": "discord_message_send_failed", "reason": "user_not_found", **user_log_context(user)})
         except discord.Forbidden:
             logger.warning("Discord user DMs are closed", extra={"event": "discord_message_send_failed", "reason": "dms_closed", **user_log_context(user)})
-        except Exception as e:
+        except Exception:
             logger.exception("Discord message send failed", extra={"event": "discord_message_send_failed", "reason": "unexpected_error", **user_log_context(user)})
     else:
         for client in bot.guilds:
@@ -632,7 +758,7 @@ async def error_message(error: Exception):
                 return
             await send_message(owner_user, f"Error: {error}")
             logger.info("Owner error notification sent", extra={"event": "owner_error_notification_succeeded"})
-        except Exception as e:
+        except Exception:
             logger.exception("Owner error notification failed", extra={"event": "owner_error_notification_failed", "reason": "unexpected_error"})
     else:
         logger.warning("Owner error notification skipped", extra={"event": "owner_error_notification_skipped", "reason": "owner_discord_username_missing"})
@@ -652,7 +778,7 @@ async def delete_messages():
         async for message in channel.history(limit=100):
             if message.author == bot.user:
                 await message.delete()
-    except Exception as e:
+    except Exception:
         logger.exception("Error deleting Discord messages", extra={"event": "discord_delete_messages_failed"})
         await bot.close()
 
@@ -680,12 +806,18 @@ async def on_ready():
     successful_users = 0
     failed_users = 0
     total_new_releases = 0
+    anchor_succeeded_users = 0
+    anchor_failed_users = 0
     for user in users:
-        succeeded, release_count = await process_user(user)
+        succeeded, release_count, anchor_status = await process_user(user)
         if succeeded:
             successful_users += 1
         else:
             failed_users += 1
+        if anchor_status == "succeeded":
+            anchor_succeeded_users += 1
+        elif anchor_status == "failed":
+            anchor_failed_users += 1
         total_new_releases += release_count
 
     logger.info(
@@ -696,6 +828,8 @@ async def on_ready():
             "successful_user_count": successful_users,
             "failed_user_count": failed_users,
             "new_release_count": total_new_releases,
+            "anchor_succeeded_user_count": anchor_succeeded_users,
+            "anchor_failed_user_count": anchor_failed_users,
             "duration_seconds": round(time.monotonic() - notifier_started_at, 3),
         },
     )

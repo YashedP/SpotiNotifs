@@ -25,7 +25,7 @@ setup:
 	./$(MIGRATE_SCRIPT)
 	docker compose build
 	docker compose run --rm --no-deps server python -c \
-		"from pathlib import Path; [compile(path.read_text(), str(path), 'exec') for path in map(Path, ('OAuth2.py', 'add_user.py', 'spotify.py', 'sql.py'))]"
+		"from pathlib import Path; [compile(path.read_text(), str(path), 'exec') for path in map(Path, ('OAuth2.py', 'add_user.py', 'anchor.py', 'anchor_credentials.py', 'spotify.py', 'sql.py'))]"
 
 install:
 	-@sudo systemctl stop "$(TIMER_NAME)" "$(SERVICE_NAME)"

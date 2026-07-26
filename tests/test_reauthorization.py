@@ -2,10 +2,14 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
+from os import environ
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+from cryptography.fernet import Fernet
+
 import sql
+from anchor_credentials import decrypt_api_key
 
 
 class ReauthorizationTest(unittest.TestCase):
@@ -22,11 +26,19 @@ class ReauthorizationTest(unittest.TestCase):
         cls.temp_dir.cleanup()
 
     def setUp(self) -> None:
+        self.environment = patch.dict(
+            environ,
+            {"SPOTINOTIFS_CREDENTIAL_KEY": Fernet.generate_key().decode("ascii")},
+        )
+        self.environment.start()
         sql.init_db()
         with closing(sqlite3.connect(sql.USERS_DB)) as conn:
             conn.execute("DELETE FROM users")
             conn.commit()
         add_user.users.clear()
+
+    def tearDown(self) -> None:
+        self.environment.stop()
 
     def add_existing_user(self) -> sql.User:
         existing_user = sql.User(
@@ -37,6 +49,7 @@ class ReauthorizationTest(unittest.TestCase):
             playlist_id="existing-playlist-id",
             discord_id="existing-discord-id",
             user_items={"existing-album-id"},
+            anchor_api_key_ciphertext="existing-anchor-ciphertext",
         )
         self.assertTrue(sql.add_user(existing_user))
         return existing_user
@@ -69,6 +82,7 @@ class ReauthorizationTest(unittest.TestCase):
         self.assertEqual(updated_user.playlist_id, "existing-playlist-id")
         self.assertEqual(updated_user.discord_id, "existing-discord-id")
         self.assertEqual(updated_user.get_items(), {"existing-album-id"})
+        self.assertEqual(updated_user.anchor_api_key_ciphertext, "existing-anchor-ciphertext")
         self.assertEqual(len(sql.get_all_users()), 1)
         refresh_access_token.assert_not_called()
         create_playlist.assert_not_called()
@@ -141,6 +155,8 @@ class ReauthorizationTest(unittest.TestCase):
         self.assertIn("Connect a new user", body)
         self.assertIn("Reconnect an existing user", body)
         self.assertIn('id="signup-want-playlist" name="want_playlist">', body)
+        self.assertIn('action="/anchor-settings"', body)
+        self.assertIn('type="password" id="anchor-settings-api-key"', body)
 
     def test_duplicate_signup_does_not_start_reauthorization(self) -> None:
         self.add_existing_user()
@@ -155,6 +171,86 @@ class ReauthorizationTest(unittest.TestCase):
         self.assertIn("Use Reconnect Spotify instead", response.get_data(as_text=True))
         self.assertEqual(add_user.users, {})
         create_authorization_url.assert_not_called()
+
+    def test_matching_spotify_account_can_set_encrypted_anchor_key(self) -> None:
+        self.add_existing_user()
+        with (
+            patch.object(add_user.OAuth2, "refresh_access_token", return_value={"access_token": "existing-access-token"}),
+            patch.object(add_user.OAuth2, "get_spotify_user_id", return_value="spotify-account-id"),
+            patch.object(add_user.OAuth2, "create_authorization_url", return_value="https://accounts.spotify.test/authorize"),
+            patch.object(
+                add_user.OAuth2,
+                "get_access_token",
+                return_value={"access_token": "new-access-token", "refresh_token": "new-refresh-token"},
+            ),
+        ):
+            client = add_user.app.test_client()
+            settings_response = client.post(
+                "/anchor-settings",
+                data={
+                    "username": "existing-user",
+                    "action": "set",
+                    "api_key": "anchor_api_key_secret",
+                },
+            )
+            state = next(iter(add_user.users))
+            pending = add_user.users[state]
+            self.assertNotIn("anchor_api_key_secret", pending["anchor_api_key_ciphertext"])
+            callback_response = client.get(f"/callback?code=authorization-code&state={state}")
+
+        self.assertEqual(settings_response.status_code, 302)
+        self.assertEqual(callback_response.status_code, 200)
+        updated_user = sql.get_user_by_username("existing-user")
+        self.assertEqual(updated_user.refresh_token, "new-refresh-token")
+        self.assertEqual(decrypt_api_key(updated_user.anchor_api_key_ciphertext), "anchor_api_key_secret")
+
+    def test_mismatched_spotify_account_cannot_replace_anchor_key(self) -> None:
+        self.add_existing_user()
+        with (
+            patch.object(add_user.OAuth2, "refresh_access_token", return_value={"access_token": "existing-access-token"}),
+            patch.object(add_user.OAuth2, "get_spotify_user_id", side_effect=["expected-account", "different-account"]),
+            patch.object(add_user.OAuth2, "create_authorization_url", return_value="https://accounts.spotify.test/authorize"),
+            patch.object(
+                add_user.OAuth2,
+                "get_access_token",
+                return_value={"access_token": "new-access-token", "refresh_token": "new-refresh-token"},
+            ),
+        ):
+            client = add_user.app.test_client()
+            client.post(
+                "/anchor-settings",
+                data={"username": "existing-user", "action": "set", "api_key": "replacement-key"},
+            )
+            state = next(iter(add_user.users))
+            callback_response = client.get(f"/callback?code=authorization-code&state={state}")
+
+        self.assertEqual(callback_response.status_code, 403)
+        unchanged_user = sql.get_user_by_username("existing-user")
+        self.assertEqual(unchanged_user.refresh_token, "old-refresh-token")
+        self.assertEqual(unchanged_user.anchor_api_key_ciphertext, "existing-anchor-ciphertext")
+
+    def test_matching_spotify_account_can_disable_anchor(self) -> None:
+        self.add_existing_user()
+        with (
+            patch.object(add_user.OAuth2, "refresh_access_token", return_value={"access_token": "existing-access-token"}),
+            patch.object(add_user.OAuth2, "get_spotify_user_id", return_value="spotify-account-id"),
+            patch.object(add_user.OAuth2, "create_authorization_url", return_value="https://accounts.spotify.test/authorize"),
+            patch.object(
+                add_user.OAuth2,
+                "get_access_token",
+                return_value={"access_token": "new-access-token", "refresh_token": "new-refresh-token"},
+            ),
+        ):
+            client = add_user.app.test_client()
+            client.post(
+                "/anchor-settings",
+                data={"username": "existing-user", "action": "disable"},
+            )
+            state = next(iter(add_user.users))
+            callback_response = client.get(f"/callback?code=authorization-code&state={state}")
+
+        self.assertEqual(callback_response.status_code, 200)
+        self.assertIsNone(sql.get_user_by_username("existing-user").anchor_api_key_ciphertext)
 
 
 if __name__ == "__main__":
