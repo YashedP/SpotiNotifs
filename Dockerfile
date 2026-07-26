@@ -12,7 +12,7 @@ WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
-COPY OAuth2.py add_user.py main.py logging_config.py spotify.py sql.py ./
+COPY OAuth2.py add_user.py anchor.py anchor_credentials.py main.py logging_config.py spotify.py sql.py ./
 
 RUN mkdir -p /app/data \
     && ln -s /app/data/users.db /app/users.db \

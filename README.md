@@ -21,6 +21,27 @@ Set these env vars in Dokploy's Compose environment UI. For local development, c
 | `tokenUrl` | yes | Spotify token URL |
 | `discord_token` | yes | Discord bot token used by the notifier |
 | `owner_discord_username` | yes | Discord username to receive notifier errors |
+| `ANCHOR_API_BASE_URL` | no | Anchor API origin; defaults to `https://anchor-api.yashjani.com` |
+| `SPOTINOTIFS_CREDENTIAL_KEY` | for Anchor | Fernet key used to encrypt per-user Anchor API keys |
+
+Generate the credential encryption key once and keep the same value across redeploys:
+
+```bash
+uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Do not rotate or remove this key while users have Anchor configured unless their stored API keys are replaced afterward.
+
+## Anchor notifications
+
+Anchor delivery is optional and supplements Discord.
+Create an Anchor API key with only the `notifications:create` action, then use the **Anchor notifications** form on the SpotiNotifs home page to add or replace it.
+The form verifies ownership by comparing the existing Spotify account with a fresh Spotify authorization before saving the encrypted key.
+The same form can disable Anchor without exposing the stored credential.
+
+Each completed scan creates one Routine, inform-only Anchor notification containing the final release, stray, catch-up, or no-release result.
+Long release lists are reduced to one summary within Anchor's message limit, while Discord retains the complete digest.
+Anchor delivery failures are logged but do not block Discord.
 
 Do not set `PORT` in Dokploy. Compose sets `PORT=80` so the container behaves like a standard HTTP service. Direct local runs still default to `5000`.
 

@@ -1,11 +1,14 @@
-from dotenv import load_dotenv
-from flask import Flask, redirect, request
+import asyncio
 import os
 import uuid
-import sql
+
+from dotenv import load_dotenv
+from flask import Flask, redirect, request
+
 import OAuth2
 import spotify
-import asyncio
+import sql
+from anchor_credentials import CredentialConfigurationError, encrypt_api_key
 from logging_config import configure_logging, get_logger
 
 app = Flask(__name__)
@@ -79,7 +82,9 @@ def index():
                 font-weight: bold;
                 color: #333;
             }
-            input[type="text"] {
+            input[type="text"],
+            input[type="password"],
+            select {
                 width: 100%;
                 padding: 10px;
                 border: 1px solid #ddd;
@@ -88,6 +93,8 @@ def index():
                 box-sizing: border-box;
             }
             input[type="text"]:focus-visible,
+            input[type="password"]:focus-visible,
+            select:focus-visible,
             input[type="checkbox"]:focus-visible,
             button:focus-visible {
                 outline: 3px solid rgba(29, 185, 84, 0.3);
@@ -162,6 +169,29 @@ def index():
                     <button type="submit">Reconnect Spotify</button>
                 </form>
             </section>
+
+            <section class="form-section" aria-labelledby="anchor-settings-heading">
+                <h2 id="anchor-settings-heading">Anchor notifications</h2>
+                <p class="section-description">Add, replace, or disable routine Anchor notifications. Spotify authorization verifies the account before settings change.</p>
+                <form action="/anchor-settings" method="POST">
+                    <div class="form-group">
+                        <label for="anchor-settings-username">Existing username</label>
+                        <input type="text" id="anchor-settings-username" name="username" required placeholder="Your existing username">
+                    </div>
+                    <div class="form-group">
+                        <label for="anchor-settings-action">Action</label>
+                        <select id="anchor-settings-action" name="action">
+                            <option value="set">Add or replace API key</option>
+                            <option value="disable">Disable Anchor notifications</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="anchor-settings-api-key">Anchor API key</label>
+                        <input type="password" id="anchor-settings-api-key" name="api_key" autocomplete="off" placeholder="Required when adding or replacing">
+                    </div>
+                    <button type="submit">Verify with Spotify</button>
+                </form>
+            </section>
         </main>
     </body>
     </html>
@@ -228,6 +258,57 @@ def reauth():
     )
     return redirect(auth_url)
 
+
+@app.route('/anchor-settings', methods=['POST'])
+def anchor_settings():
+    username = (request.form.get('username') or '').strip()
+    action = (request.form.get('action') or '').strip()
+    api_key = request.form.get('api_key') or ''
+    if not username or action not in {'set', 'disable'}:
+        logger.info("Anchor settings form is invalid", extra={"event": "web_anchor_settings_form_invalid"})
+        return "Username and a valid Anchor settings action are required.", 400
+
+    existing_user = sql.get_user_by_username(username)
+    if not existing_user:
+        logger.info("Anchor settings user not found", extra={"event": "web_anchor_settings_user_not_found", "username": username})
+        return f"User {username} was not found. Connect a new user instead.", 404
+
+    encrypted_api_key = None
+    if action == 'set':
+        try:
+            encrypted_api_key = encrypt_api_key(api_key)
+        except ValueError:
+            logger.info("Anchor settings API key is missing", extra={"event": "web_anchor_settings_api_key_missing", **existing_user.log_context()})
+            return "An Anchor API key is required when adding or replacing the key.", 400
+        except CredentialConfigurationError:
+            logger.error("Anchor credential encryption is unavailable", extra={"event": "web_anchor_settings_encryption_unavailable"})
+            return "Anchor settings are temporarily unavailable.", 503
+
+    try:
+        existing_token = OAuth2.refresh_access_token(existing_user.refresh_token)
+        expected_spotify_user_id = OAuth2.get_spotify_user_id(existing_token['access_token'])
+    except Exception:
+        logger.exception(
+            "Could not verify existing Spotify account for Anchor settings",
+            extra={"event": "web_anchor_settings_existing_identity_failed", **existing_user.log_context()},
+        )
+        return "Reconnect Spotify before changing Anchor settings.", 409
+
+    state = str(uuid.uuid4())
+    users[state] = {
+        'flow': 'anchor_settings',
+        'username': username,
+        'anchor_action': action,
+        'anchor_api_key_ciphertext': encrypted_api_key,
+        'expected_spotify_user_id': expected_spotify_user_id,
+    }
+    logger.info(
+        "Anchor settings authorization started",
+        extra={"event": "web_anchor_settings_authorization_started", "action": action, **existing_user.log_context()},
+    )
+    auth_url = OAuth2.create_authorization_url(state=state)
+    return redirect(auth_url)
+
 @app.route('/callback')
 def callback():
     authCode = request.args.get('code')
@@ -240,7 +321,7 @@ def callback():
     
     if user_UUID not in users:
         logger.info("OAuth callback state was not found", extra={"event": "web_oauth_callback_state_missing", "user_uuid": user_UUID})
-        return f"User not found"
+        return "User not found"
     
     user_data = users[user_UUID]
     del users[user_UUID]
@@ -249,6 +330,37 @@ def callback():
     
     response = OAuth2.get_access_token(authCode)
     refresh_token = response['refresh_token']
+
+    if flow == 'anchor_settings':
+        existing_user = sql.get_user_by_username(username)
+        if not existing_user:
+            logger.info("Anchor settings user no longer exists", extra={"event": "web_anchor_settings_user_not_found", "username": username})
+            return f"User {username} was not found. Connect a new user instead.", 404
+        try:
+            authorized_spotify_user_id = OAuth2.get_spotify_user_id(response['access_token'])
+        except Exception:
+            logger.exception(
+                "Could not verify authorized Spotify account for Anchor settings",
+                extra={"event": "web_anchor_settings_authorized_identity_failed", **existing_user.log_context()},
+            )
+            return "Spotify account verification failed. Return home and try again.", 502
+        if authorized_spotify_user_id != user_data['expected_spotify_user_id']:
+            logger.warning(
+                "Anchor settings Spotify account mismatch",
+                extra={"event": "web_anchor_settings_identity_mismatch", **existing_user.log_context()},
+            )
+            return "The authorized Spotify account does not match this user.", 403
+
+        sql.update_user_refresh_token(existing_user, refresh_token)
+        sql.update_user_anchor_api_key(existing_user, user_data['anchor_api_key_ciphertext'])
+        configured = user_data['anchor_action'] == 'set'
+        logger.info(
+            "Anchor settings updated",
+            extra={"event": "web_anchor_settings_updated", "configured": configured, **existing_user.log_context()},
+        )
+        if configured:
+            return f"Anchor notifications enabled for {username}."
+        return f"Anchor notifications disabled for {username}."
 
     if flow == 'reauth':
         existing_user = sql.get_user_by_username(username)
