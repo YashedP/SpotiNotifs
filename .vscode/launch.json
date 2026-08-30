@@ -17,7 +17,7 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${workspaceFolder}/spotify.py",
-            "args": ["catchup", "08-17-2025", "08-21-2025"],
+            "args": ["catchup", "${input:catchup_start_date}", "${input:catchup_end_date}", "--user", "${input:catchup_user_uuid}"],
             "console": "integratedTerminal",
             "justMyCode": true,
             "env": {
@@ -37,6 +37,23 @@
                 "PYTHONPATH": "${workspaceFolder}"
             },
             "cwd": "${workspaceFolder}"
+        }
+    ],
+    "inputs": [
+        {
+            "id": "catchup_user_uuid",
+            "type": "promptString",
+            "description": "User UUID from python spotify.py users list"
+        },
+        {
+            "id": "catchup_start_date",
+            "type": "promptString",
+            "description": "Inclusive catch-up start date (YYYY-MM-DD)"
+        },
+        {
+            "id": "catchup_end_date",
+            "type": "promptString",
+            "description": "Inclusive catch-up end date (YYYY-MM-DD)"
         }
     ]
 }

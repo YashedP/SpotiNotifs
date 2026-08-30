@@ -16,6 +16,7 @@ class ReauthorizationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.temp_dir = tempfile.TemporaryDirectory()
+        cls.original_db = sql.USERS_DB
         sql.USERS_DB = Path(cls.temp_dir.name) / "users.db"
 
         global add_user
@@ -23,6 +24,7 @@ class ReauthorizationTest(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
+        sql.USERS_DB = cls.original_db
         cls.temp_dir.cleanup()
 
     def setUp(self) -> None:

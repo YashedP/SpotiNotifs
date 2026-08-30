@@ -3,8 +3,9 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
+from datetime import date
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from aiohttp import web
 from cryptography.fernet import Fernet
@@ -150,6 +151,7 @@ class AnchorClientTest(unittest.IsolatedAsyncioTestCase):
 
 class AnchorDigestTest(unittest.TestCase):
     def setUp(self) -> None:
+        self.options = spotify.RunOptions(date(2026, 8, 30), True)
         self.user = sql.User(
             "user-id",
             "user",
@@ -168,7 +170,7 @@ class AnchorDigestTest(unittest.TestCase):
             }
         }
 
-        notification = spotify.build_anchor_notification(self.user, releases, 1)
+        notification = spotify.build_anchor_notification(self.user, releases, 1, self.options)
 
         self.assertIn("Artist", notification.message)
         self.assertIn("Album", notification.message)
@@ -186,7 +188,7 @@ class AnchorDigestTest(unittest.TestCase):
             }
         }
 
-        notification = spotify.build_anchor_notification(self.user, releases, 100)
+        notification = spotify.build_anchor_notification(self.user, releases, 100, self.options)
 
         self.assertLessEqual(len(notification.message), anchor.MAX_ANCHOR_MESSAGE_CHARACTERS)
         self.assertIn("100 new releases from 1 artists.", notification.message)
@@ -203,6 +205,12 @@ class AnchorDigestTest(unittest.TestCase):
         )
 
         self.assertNotEqual(first["idempotency_key"], second["idempotency_key"])
+
+    def test_empty_catchup_digest_uses_explicit_range(self) -> None:
+        options = spotify.RunOptions(date(2026, 8, 30), False, date(2026, 8, 20), date(2026, 8, 24))
+        notification = spotify.build_anchor_notification(self.user, {}, 0, options)
+        self.assertEqual(notification.title, "Spotify New Releases 2026-08-20 through 2026-08-24")
+        self.assertEqual(notification.message, "No new releases from 2026-08-20 through 2026-08-24!")
 
 
 class AnchorNotifierIntegrationTest(unittest.IsolatedAsyncioTestCase):
@@ -225,7 +233,9 @@ class AnchorNotifierIntegrationTest(unittest.IsolatedAsyncioTestCase):
                 return_value="failed",
             ) as send_anchor_notification,
         ):
-            succeeded, release_count, anchor_status = await spotify.process_user(user)
+            succeeded, release_count, anchor_status = await spotify.process_user(
+                user, spotify.RunOptions(date(2026, 8, 30), True), Mock()
+            )
 
         self.assertTrue(succeeded)
         self.assertEqual(release_count, 2)

@@ -71,7 +71,9 @@ Create two Server Jobs:
 
 Update the path if Dokploy shows a different Compose directory. These jobs reuse the same image, environment, and `spotinotifs_data` volume as the web service, but run with `SERVICE_NAME=notifier` for logs.
 
-Logs are always emitted as newline-delimited JSON to stdout. Optional logging env vars:
+Notifier and server logs are emitted as newline-delimited JSON to stdout.
+The user-listing CLI reserves stdout for user records and sends diagnostics to stderr.
+Optional logging env vars:
 
 | Variable | Default | Note |
 | --- | --- | --- |
@@ -142,6 +144,102 @@ docker compose build
 docker compose up server
 docker compose run --no-deps notifier
 ```
+
+## List users and recover missed releases
+
+Run these commands from the project directory with its Python environment active.
+The CLI uses the existing `users.db` next to `spotify.py`.
+In the notifier container, that path points to the persistent database volume.
+
+List registered users and copy their UUIDs:
+
+```bash
+python spotify.py users list
+python spotify.py users list --format json
+python spotify.py users list --format ids
+```
+
+The default table shows UUID, username, and Discord username.
+JSON additionally includes `discord_id` and `playlist_id`, using lower snake_case keys such as `user_uuid`.
+IDs output contains one UUID per line without headers.
+All formats sort by username, then UUID, and never include tokens or notification history.
+Listing requires no Spotify or Discord credentials and opens the database read-only.
+A missing or unusable database is an error; listing never creates one.
+The legacy `python sql.py scan` command remains available with its existing JSON log output.
+
+Replace `UUID_A` and `UUID_B` below with IDs from the listing:
+
+```bash
+python spotify.py catchup 2026-08-20 2026-08-24 --user UUID_A
+python spotify.py catchup 2026-08-20 2026-08-24 --user UUID_A --user UUID_B
+python spotify.py catchup 2026-08-20 2026-08-24 --all-users
+```
+
+Catch-up requires exactly one selection method: repeated `--user`, `--users-from-stdin`, or `--all-users`.
+Running catch-up without a selection now fails instead of notifying everyone.
+Duplicate UUIDs are processed once; unknown UUIDs and empty selections fail before processing any user.
+Users with different outage periods need separate invocations.
+
+Filter JSON records with `jq` and pipe UUIDs directly into catch-up:
+
+```bash
+set -o pipefail
+python spotify.py users list --format json |
+  jq -r '.[] | select(.username == "alice") | .user_uuid' |
+  python spotify.py catchup 2026-08-20 2026-08-24 --users-from-stdin
+```
+
+Stdin is read only with `--users-from-stdin`; blank lines are ignored.
+Both dates are inclusive, and a single-day range is valid.
+ISO dates (`YYYY-MM-DD`) and the legacy `MM-DD-YYYY` format are accepted.
+Invalid dates, reversed ranges, and future dates are rejected.
+Today is included when requested, using the notifier's local timezone (`America/New_York` in Compose).
+
+**Catch-up executes immediately and replays the entire range.**
+It sends Discord messages and updates each selected user's playlist if one is configured.
+Configured Anchor notifications continue to mirror the final digest for selected users, retaining their existing best-effort delivery and idempotency behavior.
+Repeated or overlapping runs can duplicate messages and playlist tracks, including releases already handled by today's daily run.
+Catch-up leaves daily notification history untouched.
+Recovery uses currently followed artists and releases currently available through Spotify; it cannot reconstruct historical follows or removed releases.
+
+If a user's scan, playlist update, or message delivery fails, the run reports failure and continues with other selected users.
+Existing owner error alerts remain enabled, even when the owner is outside the selected recovery users.
+Partial delivery is not rolled back, so retrying a failed range may replay successful actions.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Successful listing or notifier run |
+| `1` | Operational failure, including database, authorization, scan, or delivery errors |
+| `2` | Invalid arguments, dates, or user selection |
+
+### Compose commands
+
+Use `-T` to disable terminal formatting for pipelines and `--rm` to remove the one-off container after execution:
+
+```bash
+docker compose run --rm --no-deps -T notifier python spotify.py users list
+docker compose run --rm --no-deps -T notifier python spotify.py catchup 2026-08-20 2026-08-24 --user UUID_A
+
+set -o pipefail
+docker compose run --rm --no-deps -T notifier python spotify.py users list --format json |
+  jq -r '.[] | select(.username == "alice") | .user_uuid' |
+  docker compose run --rm --no-deps -T notifier python spotify.py catchup 2026-08-20 2026-08-24 --users-from-stdin
+```
+
+No-argument `python spotify.py` still runs the scheduled daily notifier for everyone.
+Existing Compose jobs and systemd schedules need no changes.
+
+## Verification
+
+Run the test suite with the project Python environment:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Tests use temporary databases, mocked service boundaries, and a local HTTP fixture for the Anchor client and do not send real notifications.
+
+## Legacy service commands
 
 Useful legacy systemd commands are still available while the old deployment exists:
 
