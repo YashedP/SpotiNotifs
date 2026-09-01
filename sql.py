@@ -1,13 +1,11 @@
 import json
 import sys
-from collections.abc import Generator
 from contextlib import closing
 from pathlib import Path
 from sqlite3 import connect
 
 from logging_config import configure_logging, get_logger
 
-configure_logging()
 logger = get_logger(__name__)
 
 USERS_DB = Path(__file__).resolve().parent / "users.db"
@@ -20,6 +18,7 @@ class User:
         username,
         discord_username,
         refresh_token,
+
         playlist_id=None,
         discord_id=None,
         user_items=None,
@@ -147,9 +146,10 @@ def add_user(user: User) -> bool:
         raise
 
 
-def get_all_users() -> list[User]:
+def get_all_users(*, read_only: bool = False) -> list[User]:
     try:
-        with closing(connect(USERS_DB)) as conn:
+        database = USERS_DB.resolve().as_uri() + "?mode=ro" if read_only else USERS_DB
+        with closing(connect(database, uri=read_only)) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM users")
             users = cursor.fetchall()
@@ -159,18 +159,15 @@ def get_all_users() -> list[User]:
         raise
 
 
-def iterate_users_one_by_one() -> Generator[User]:
-    try:
-        with closing(connect(USERS_DB)) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM users")
-            users = cursor.fetchall()
-        logger.info("Users loaded for iteration", extra={"event": "db_users_loaded", "user_count": len(users)})
-        for user in users:
-            yield User(*user)
-    except Exception:
-        logger.exception("Error iterating users", extra={"event": "db_iterate_users_failed"})
-        raise
+
+def list_user_summaries() -> list[dict[str, str | None]]:
+    fields = ("user_uuid", "username", "discord_username", "discord_id", "playlist_id")
+    with closing(connect(USERS_DB.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+        rows = conn.execute(
+            "SELECT user_UUID, username, discord_username, discord_id, playlist_id "
+            "FROM users ORDER BY username, user_UUID"
+        ).fetchall()
+    return [dict(zip(fields, row)) for row in rows]
 
 
 def get_user_by_uuid(user_UUID: str) -> User | None:
@@ -349,6 +346,7 @@ def update_user_anchor_api_key(user: User, ciphertext: str | None) -> None:
 
 
 if __name__ == "__main__":
+    configure_logging()
     init_db()
     if len(sys.argv) > 1:
         if sys.argv[1] == "scan":

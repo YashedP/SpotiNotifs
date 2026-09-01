@@ -1,8 +1,11 @@
+import argparse
 import asyncio
+import json
 import os
 import sys
 import time
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -21,21 +24,42 @@ from anchor_credentials import (
 )
 from logging_config import configure_logging, get_logger
 
-load_dotenv()
-RUN_ID = configure_logging(service=os.getenv("SERVICE_NAME", "notifier"))
 logger = get_logger(__name__)
 
-DISCORD_TOKEN = os.getenv("discord_token")
-# SpotiNotifs only sends text DMs and never initializes Discord voice support.
-discord.VoiceClient.warn_nacl = False
-bot = discord.Client(intents=discord.Intents.all())
-OWNER_DISCORD_USERNAME = os.getenv("owner_discord_username")
-SPOTIFY_SEMAPHORE = asyncio.Semaphore(1)
 BREAKPOINT = 100
-is_new_day = datetime.now().hour < 12
-catchup = False
-catchup_days = []
-notifier_started_at = time.monotonic()
+
+
+@dataclass(frozen=True)
+class RunOptions:
+    today: date
+    is_new_day: bool
+    start_date: date | None = None
+    end_date: date | None = None
+
+    @property
+    def catchup(self) -> bool:
+        return self.start_date is not None
+
+    @property
+    def mode(self) -> str:
+        return "catchup" if self.catchup else "daily"
+
+    @property
+    def date_range(self) -> str:
+        return f"{self.start_date} through {self.end_date}"
+
+    def includes(self, release_date: Any) -> bool:
+        if not isinstance(release_date, str) or len(release_date) != 10:
+            return False
+        try:
+            released = date.fromisoformat(release_date)
+        except ValueError:
+            return False
+        if released.isoformat() != release_date:
+            return False
+        if self.start_date is not None and self.end_date is not None:
+            return self.start_date <= released <= self.end_date
+        return released == self.today
 
 FOLLOWING_ARTISTS_URL  = "https://api.spotify.com/v1/me/following"
 ARTIST_ALBUMS_URL      = "https://api.spotify.com/v1/artists/{artist_id}/albums"
@@ -46,8 +70,6 @@ ALBUM_URL              = "https://api.spotify.com/v1/albums/{album_id}"
 CREATE_PLAYLIST_URL    = "https://api.spotify.com/v1/users/{user_id}/playlists"
 GET_PLAYLIST_URL       = "https://api.spotify.com/v1/playlists/{playlist_id}"
 ADD_TO_PLAYLIST_URL    = "https://api.spotify.com/v1/playlists/{playlist_id}/tracks"
-
-sql.init_db()
 
 def user_log_context(user: sql.User) -> dict[str, str | None]:
     return user.log_context()
@@ -91,8 +113,8 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
                 return await response.json()
         except aiohttp.ClientResponseError as e:
             if e.status == 429:
-                seconds_to_wait = int(e.headers.get('Retry-After'))  # pyright: ignore[reportArgumentType, reportOptionalMemberAccess]
-                
+                seconds_to_wait = max(0, int((e.headers or {}).get('Retry-After', '0')))
+
                 logger.warning(
                     "Spotify request rate limited",
                     extra={
@@ -105,12 +127,10 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
                     },
                 )
                 if seconds_to_wait > 60:
-                    await error_message(Exception(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry... for user {user.safe_str()}"))
-                    sys.exit(1)
-                
+                    raise RuntimeError(f"Spotify rate limit requires waiting {seconds_to_wait} seconds") from e
+
                 await asyncio.sleep(seconds_to_wait)
             elif e.status == 403:
-                error_msg = f"API call returned 403 Forbidden (Unauthorized) for user {user.safe_str()} at URL: {url}"
                 logger.error(
                     "Spotify request forbidden",
                     extra={
@@ -120,8 +140,7 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
                         **user_log_context(user),
                     },
                 )
-                await error_message(Exception(error_msg))
-                sys.exit(1)
+                raise
             elif 500 <= e.status < 600:
                 # Handle 500-level server errors with exponential backoff
                 wait_time = (3 - attempts) * 2  # Exponential backoff: 2, 4 seconds
@@ -150,13 +169,13 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
                         **user_log_context(user),
                     },
                 )
-                raise 
+                raise
         attempts -= 1
     logger.error(
         "Spotify request exhausted retries",
         extra={"event": "spotify_request_retries_exhausted", "endpoint": endpoint_name(url), **user_log_context(user)},
     )
-    return {}
+    raise RuntimeError("Spotify request exhausted retries")
 
 def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] | None = None, body: dict[str, Any] | None = None, method: str = "GET") -> dict[str, Any]:
     params = params or {}
@@ -184,14 +203,14 @@ def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] | None
                 response = requests.post(url, params=params, headers=headers, json=body)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
-    
+
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
-            if hasattr(e, 'response') and e.response and e.response.status_code == 429:
+            if e.response is not None and e.response.status_code == 429:
                 retry_after = e.response.headers.get('Retry-After')
-                seconds_to_wait = int(retry_after) if retry_after else 0
-                
+                seconds_to_wait = max(0, int(retry_after)) if retry_after else 0
+
                 logger.warning(
                     "Spotify request rate limited",
                     extra={
@@ -205,12 +224,10 @@ def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] | None
                     },
                 )
                 if seconds_to_wait > 60:
-                    asyncio.run(error_message(Exception(f"Rate limited (429). Waiting {seconds_to_wait} seconds before retry... for user {user.safe_str()}")))
-                    sys.exit(1)
-                
+                    raise RuntimeError(f"Spotify rate limit requires waiting {seconds_to_wait} seconds") from e
+
                 time.sleep(seconds_to_wait)
-            elif hasattr(e, 'response') and e.response and e.response.status_code == 403:
-                error_msg = f"API call returned 403 Forbidden (Unauthorized) for user {user.safe_str()} at URL: {url}"
+            elif e.response is not None and e.response.status_code == 403:
                 logger.error(
                     "Spotify request forbidden",
                     extra={
@@ -221,9 +238,8 @@ def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] | None
                         **user_log_context(user),
                     },
                 )
-                asyncio.run(error_message(Exception(error_msg)))
-                sys.exit(1)
-            elif hasattr(e, 'response') and e.response and 500 <= e.response.status_code < 600:
+                raise
+            elif e.response is not None and 500 <= e.response.status_code < 600:
                 # Handle 500-level server errors with exponential backoff
                 wait_time = (3 - attempts) * 2  # Exponential backoff: 2, 4 seconds
                 logger.warning(
@@ -260,12 +276,12 @@ def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] | None
         "Spotify request exhausted retries",
         extra={"event": "spotify_request_retries_exhausted", "endpoint": endpoint_name(url), "method": method, **user_log_context(user)},
     )
-    return {}
+    raise RuntimeError("Spotify request exhausted retries")
 
 def get_all_artists(user: sql.User) -> list[dict]:
     artists = []
     next_cursor = None
-    
+
     while True:
         try:
             params = {
@@ -278,16 +294,16 @@ def get_all_artists(user: sql.User) -> list[dict]:
             next_cursor = response['cursors']['after']
         except requests.exceptions.RequestException:
             logger.exception("Error requesting followed artists", extra={"event": "spotify_followed_artists_failed", **user_log_context(user)})
-            return artists
+            raise
         if not next_cursor:
             break
-    
+
     logger.info("Fetched followed artists", extra={"event": "spotify_followed_artists_succeeded", "artist_count": len(artists), **user_log_context(user)})
     return artists
 
-async def get_all_albums(user: sql.User, artist_id: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore) -> list[str]:
+async def get_all_albums(user: sql.User, artist_id: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore) -> list[dict[str, Any]]:
     albums = []
-    
+
     next_url = None
     while True:
         if next_url:
@@ -300,20 +316,20 @@ async def get_all_albums(user: sql.User, artist_id: str, session: aiohttp.Client
                     "include_groups": "album,single,appears_on",
                     "market": "US",
                 })
-        
+
         for item in response['items']:
             if item['album_type'] == "compilation":
                 continue
             albums.append(item)
-        
+
         next_url = response['next']
-        
+
         if not next_url:
             break
 
     return albums
 
-async def recent_20_for_each_category_album(user: sql.User, artist_id: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore) -> list[str]:
+async def recent_20_for_each_category_album(user: sql.User, artist_id: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore) -> list[dict[str, Any]]:
     albums = []
     for category in ["album", "single", "appears_on"]:
         async with semaphore:
@@ -322,7 +338,7 @@ async def recent_20_for_each_category_album(user: sql.User, artist_id: str, sess
                 "include_groups": category,
                 "market": "US"
             })
-    
+
         albums.extend(response['items'])
     return albums
 
@@ -330,7 +346,7 @@ async def check_playlist_exists(user: sql.User) -> bool:
     items = []
     next = None
     link = ME_PLAYLISTS_URL
-    
+
     while True:
         response = spotify_request_sync(user, link, params={"limit": "50"})
         items.extend(response['items'])
@@ -338,7 +354,7 @@ async def check_playlist_exists(user: sql.User) -> bool:
         link = next
         if not next:
             break
-    
+
     for item in items:
         if item['id'] == user.playlist_id:
             return True
@@ -348,13 +364,13 @@ async def create_playlist(user: sql.User) -> str:
     logger.info("Creating Spotify playlist", extra={"event": "spotify_playlist_create_started", **user_log_context(user)})
     response = spotify_request_sync(user, ME_URL)
     id = response['id']
-    
+
     body = {
         "name": "SpotiNotif",
         "description": "New Releases from your followed artists",
         "public": True
     }
-    
+
     response = spotify_request_sync(user, CREATE_PLAYLIST_URL.format(user_id=id), body=body, method="POST")
     playlist_id = response['id']
     logger.info("Created Spotify playlist", extra={"event": "spotify_playlist_create_succeeded", "playlist_id": playlist_id, **user_log_context(user)})
@@ -377,7 +393,7 @@ async def add_to_playlist(user: sql.User, new_releases) -> None:
             for song in songs.values():
                 link = song['id']
                 response = spotify_request_sync(user, ALBUM_URL.format(album_id=link))
-    
+
                 items = response['tracks']['items']
                 next_url = response['tracks']['next']
                 while next_url:
@@ -385,94 +401,88 @@ async def add_to_playlist(user: sql.User, new_releases) -> None:
                     items.extend(response['items'])
                     next_url = response['next']
                 uris.extend([item['uri'] for item in items])
-    
-        num_requests_required = len(uris) // BREAKPOINT + 1
-        for i in range(num_requests_required):
-            body = {"uris": uris[i * BREAKPOINT : (i + 1) * BREAKPOINT]}
+
+        for offset in range(0, len(uris), BREAKPOINT):
+            body = {"uris": uris[offset : offset + BREAKPOINT]}
             spotify_request_sync(user, ADD_TO_PLAYLIST_URL.format(playlist_id=user.playlist_id), body=body, method="POST")
         logger.info(
             "Playlist update succeeded",
             extra={"event": "playlist_update_succeeded", "release_count": release_count, "track_count": len(uris), **user_log_context(user)},
         )
-    except Exception as e:
+    except Exception:
         logger.exception("Playlist update failed", extra={"event": "playlist_update_failed", "release_count": release_count, **user_log_context(user)})
-        await error_message(Exception(f"Error adding to playlist: {e}"))
+        raise
 
-async def new_releases(user: sql.User) -> tuple[str, int, anchor.AnchorNotification | None]:
+async def new_releases(user: sql.User, options: RunOptions) -> tuple[str, int, anchor.AnchorNotification]:
     logger.info("Refreshing Spotify token for user", extra={"event": "spotify_refresh_token_started", **user_log_context(user)})
     try:
         token_info = OAuth2.refresh_access_token(user.refresh_token)
     except Exception:
         logger.exception("Spotify token refresh failed", extra={"event": "spotify_refresh_token_failed", **user_log_context(user)})
         raise
-    
+
     access_token = token_info['access_token']
     user.access_token = access_token
     logger.info("Spotify token refreshed for user", extra={"event": "spotify_refresh_token_succeeded", **user_log_context(user)})
-    
+
     try:
         artists = get_all_artists(user)
-    except Exception as e:
+    except Exception:
         logger.exception("Error requesting artists", extra={"event": "spotify_artists_request_failed", **user_log_context(user)})
-        await error_message(Exception(f"Error requesting artists: {e}"))
-        return "Error requesting artists", 0, None
-    
+        raise
+
     artists_ids = [(artist['id'], artist['name']) for artist in artists]
     logger.info("Starting artist processing", extra={"event": "artist_processing_started", "artist_count": len(artists_ids), **user_log_context(user)})
-    
+
     new_releases = {}
     songs_already_added = user.get_items()
-    if is_new_day:
+    if not options.catchup and options.is_new_day:
         user.reset_items()
-    
+
+    semaphore = asyncio.Semaphore(1)
     async with aiohttp.ClientSession() as session:
         async def process_single_artist(artist_id, artist_name):
-            if not catchup:
-                albums = await recent_20_for_each_category_album(user, artist_id, session, SPOTIFY_SEMAPHORE)
+            if not options.catchup:
+                albums = await recent_20_for_each_category_album(user, artist_id, session, semaphore)
             else:
-                albums = await get_all_albums(user, artist_id, session, SPOTIFY_SEMAPHORE)
+                albums = await get_all_albums(user, artist_id, session, semaphore)
 
             new_songs = {}
-            
-            for album in albums:
-                if not catchup:
-                    current_time = datetime.now().strftime("%Y-%m-%d")
-                
-                    if album.get('release_date') == current_time: # type: ignore
-                        album_id = album.get('id') # type: ignore
-                
-                        if album_id not in songs_already_added:
-                            user.add_item(album_id)
-                            new_songs[album_id] = album
-                else:
-                    days = [day.strftime("%Y-%m-%d") for day in catchup_days]
 
-                    if album.get('release_date') in days: # type: ignore
-                        album_id = album.get('id') # type: ignore
-                        
-                        if album_id:
-                            new_songs[album_id] = album
-                            
+            for album in albums:
+                album_id = album.get('id')
+                if not album_id or not options.includes(album.get('release_date')):
+                    continue
+                if options.catchup:
+                    new_songs[album_id] = album
+                elif album_id not in songs_already_added:
+                    user.add_item(album_id)
+                    new_songs[album_id] = album
+
             return artist_name, new_songs if new_songs else None
-        
+
         tasks = [process_single_artist(artist_id, artist_name) for artist_id, artist_name in artists_ids]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        sql.update_user_items(user)
+        failed_artists = 0
         for result in results:
             if isinstance(result, Exception):
                 logger.exception("Error processing artist", exc_info=(type(result), result, result.__traceback__), extra={"event": "artist_processing_failed", **user_log_context(user)})
-                await error_message(Exception(f"Error processing artist: {result}"))
+                failed_artists += 1
                 continue
             if isinstance(result, tuple) and len(result) == 2:
                 artist_name, new_songs = result
             else:
                 logger.warning("Unexpected artist result format", extra={"event": "artist_processing_unexpected_result", **user_log_context(user)})
+                failed_artists += 1
                 continue
             if new_songs:
                 new_releases[artist_name] = new_songs
-    
-    
+        if failed_artists:
+            raise RuntimeError(f"Release scan incomplete: {failed_artists} artist(s) failed")
+        if not options.catchup:
+            sql.update_user_items(user)
+
     release_count = sum(len(songs) for songs in new_releases.values())
     logger.info(
         "Finished release scan",
@@ -486,48 +496,46 @@ async def new_releases(user: sql.User) -> tuple[str, int, anchor.AnchorNotificat
     )
     message = ""
     if len(new_releases) > 0:
-        if catchup:
-            message += f"New Releases! {catchup_days[0].strftime('%m/%d')}-{catchup_days[-1].strftime('%m/%d')}\n\n"
-            for artist, songs in new_releases.items():
-                message += f"**{artist}**\n"
-                for song in songs.values():
-                    message += f"* [{song['name']}]({song['external_urls']['spotify']})\n"
-                message += "\n"
-        else:    
-            if is_new_day:
-                message += f"New Releases! {datetime.now().strftime('%m/%d')}\n\n"
-            else:
-                message += f"New Releases! {datetime.now().strftime('%m/%d')}\n\n" + "Strays from today:\n"
-            for artist, songs in new_releases.items():
-                message += f"**{artist}**\n"
-                for song in songs.values():
-                    message += f"* [{song['name']}]({song['external_urls']['spotify']})\n"
-                message += "\n"
-        
+        if options.catchup:
+            message += f"New Releases! {options.date_range}\n\n"
+        else:
+            message += f"New Releases! {options.today.strftime('%m/%d')}\n\n"
+            if not options.is_new_day:
+                message += "Strays from today:\n"
+        for artist, songs in new_releases.items():
+            message += f"**{artist}**\n"
+            for song in songs.values():
+                message += f"* [{song['name']}]({song['external_urls']['spotify']})\n"
+            message += "\n"
+
         await add_to_playlist(user, new_releases)
     else:
-        if is_new_day:
-            message += f"No new releases today! {datetime.now().strftime('%m/%d')}\n\n"
+        if options.catchup:
+            message += f"No new releases from {options.date_range}!\n\n"
+        elif options.is_new_day:
+            message += f"No new releases today! {options.today.strftime('%m/%d')}\n\n"
         else:
-            message += f"No strays today! {datetime.now().strftime('%m/%d')}\n\n"
-    return message, release_count, build_anchor_notification(user, new_releases, release_count)
-
+            message += f"No strays today! {options.today.strftime('%m/%d')}\n\n"
+    return message, release_count, build_anchor_notification(user, new_releases, release_count, options)
 
 def build_anchor_notification(
     user: sql.User,
     releases: dict[str, dict[str, dict[str, Any]]],
     release_count: int,
+    options: RunOptions,
 ) -> anchor.AnchorNotification:
-    today = datetime.now().strftime('%m/%d')
-    if catchup and catchup_days:
-        title = f"Spotify New Releases {catchup_days[0].strftime('%m/%d')}-{catchup_days[-1].strftime('%m/%d')}"
-    elif is_new_day:
+    today = options.today.strftime('%m/%d')
+    if options.catchup:
+        title = f"Spotify New Releases {options.date_range}"
+    elif options.is_new_day:
         title = f"Spotify New Releases {today}"
     else:
         title = f"Spotify Strays {today}"
 
     if not releases:
-        if is_new_day:
+        if options.catchup:
+            message = f"No new releases from {options.date_range}!"
+        elif options.is_new_day:
             message = f"No new releases today! {today}"
         else:
             message = f"No strays today! {today}"
@@ -624,24 +632,20 @@ async def send_anchor_notification(user: sql.User, notification: anchor.AnchorNo
     return "failed"
 
 
-async def process_user(user: sql.User) -> tuple[bool, int, str]:
+async def process_user(user: sql.User, options: RunOptions, bot: discord.Client) -> tuple[bool, int, str]:
     user_started_at = time.monotonic()
     logger.info("User processing started", extra={"event": "user_processing_started", **user_log_context(user)})
-    if catchup:
-        await send_message(user, "Catching up on all songs missed due to the bot outage! Apologies for the delay.")
-    else:
-        if is_new_day:
-            await send_message(user, "Finding new releases for the day!")
-        else:
-            await send_message(user, "Catching up on any strays from today!")
-    
     try:
-        message, release_count, anchor_notification = await new_releases(user)
-        await send_message(user, message)
-        if anchor_notification is None:
-            anchor_status = "not_attempted"
+        if options.catchup:
+            await send_message(user, f"Catching up on releases from {options.date_range}!", bot)
+        elif options.is_new_day:
+            await send_message(user, "Finding new releases for the day!", bot)
         else:
-            anchor_status = await send_anchor_notification(user, anchor_notification)
+            await send_message(user, "Catching up on any strays from today!", bot)
+
+        message, release_count, anchor_notification = await new_releases(user, options)
+        await send_message(user, message, bot)
+        anchor_status = await send_anchor_notification(user, anchor_notification)
         logger.info(
             "User processing finished",
             extra={
@@ -664,18 +668,17 @@ async def process_user(user: sql.User) -> tuple[bool, int, str]:
                 **user_log_context(user),
             },
         )
-        await error_message(Exception(f"Error processing user: {user.safe_str()}"))
+        await error_message(Exception(f"Error processing user: {user.safe_str()}"), bot)
         return False, 0, "not_attempted"
 
-@bot.event
-async def send_message(user: sql.User, message: str):
+async def send_message(user: sql.User, message: str, bot: discord.Client):
     # Split message if it's too long
     messages = split_long_message(message)
     logger.info(
         "Discord message send started",
         extra={"event": "discord_message_send_started", "message_part_count": len(messages), **user_log_context(user)},
     )
-    
+
     if user.discord_id:
         try:
             discord_user = await bot.fetch_user(user.discord_id)
@@ -687,19 +690,19 @@ async def send_message(user: sql.User, message: str):
             )
         except discord.NotFound:
             logger.warning("Discord user ID not found", extra={"event": "discord_message_send_failed", "reason": "user_not_found", **user_log_context(user)})
+            raise
         except discord.Forbidden:
             logger.warning("Discord user DMs are closed", extra={"event": "discord_message_send_failed", "reason": "dms_closed", **user_log_context(user)})
+            raise
         except Exception:
             logger.exception("Discord message send failed", extra={"event": "discord_message_send_failed", "reason": "unexpected_error", **user_log_context(user)})
+            raise
     else:
         for client in bot.guilds:
             for member in client.members:
                 if member.name == user.discord_username:
-                    try:
-                        sql.update_user_discord_id(user, str(member.id))
-                    except Exception as e:
-                        logger.exception("Failed to cache Discord ID", extra={"event": "discord_id_cache_failed", **user_log_context(user)})
-                        await error_message(Exception(f"Error updating user discord ID: {e}"))
+                    sql.update_user_discord_id(user, str(member.id))
+                    user.discord_id = str(member.id)
                     for msg in messages:
                         await member.send(msg)
                     logger.info(
@@ -713,18 +716,19 @@ async def send_message(user: sql.User, message: str):
                     )
                     return
         logger.warning("Discord member was not found", extra={"event": "discord_message_send_failed", "reason": "member_not_found", **user_log_context(user)})
+        raise RuntimeError("Discord member was not found")
 
 def split_long_message(message: str, max_length: int = 1900) -> list[str]:
     """Split a message that's too long by looking for \n delimiters"""
     if len(message) <= max_length:
         return [message]
-    
+
     messages = []
     current_message = ""
-    
+
     # Split by lines
     lines = message.split('\n')
-    
+
     for line in lines:
         # Check if adding this line would exceed the limit
         if len(current_message + line + '\n') > max_length:
@@ -737,147 +741,251 @@ def split_long_message(message: str, max_length: int = 1900) -> list[str]:
                 current_message = ""
         else:
             current_message += line + '\n'
-    
+
     # Add the last message if it has content
     if current_message.strip():
         messages.append(current_message.rstrip())
-    
+
     return messages
 
-@bot.event
-async def error_message(error: Exception):
+async def error_message(error: Exception, bot: discord.Client):
     logger.error("Sending owner error notification", extra={"event": "owner_error_notification_started", "error_type": type(error).__name__, "error_message": str(error)})
-    if OWNER_DISCORD_USERNAME:
+    owner_username = os.getenv("owner_discord_username")
+    if owner_username:
         try:
-            owner_user = sql.get_user_by_discord_username(OWNER_DISCORD_USERNAME)
+            owner_user = sql.get_user_by_discord_username(owner_username)
             if not owner_user:
                 logger.warning(
                     "Owner user was not found for error notification",
-                    extra={"event": "owner_error_notification_failed", "reason": "owner_user_not_found", "owner_discord_username": OWNER_DISCORD_USERNAME},
+                    extra={"event": "owner_error_notification_failed", "reason": "owner_user_not_found", "owner_discord_username": owner_username},
                 )
                 return
-            await send_message(owner_user, f"Error: {error}")
+            await send_message(owner_user, f"Error: {error}", bot)
             logger.info("Owner error notification sent", extra={"event": "owner_error_notification_succeeded"})
         except Exception:
             logger.exception("Owner error notification failed", extra={"event": "owner_error_notification_failed", "reason": "unexpected_error"})
     else:
         logger.warning("Owner error notification skipped", extra={"event": "owner_error_notification_skipped", "reason": "owner_discord_username_missing"})
 
-@bot.event
-async def delete_messages():
-    for client in bot.guilds:
-        for member in client.members:
-            if member.name == OWNER_DISCORD_USERNAME:
-                OWNER_DISCORD_ID = member.id
-                break
+
+def run_notifier(users: list[sql.User], options: RunOptions, token: str) -> int:
+    # SpotiNotifs only sends text DMs and never initializes Discord voice support.
+    discord.VoiceClient.warn_nacl = False
+    bot = discord.Client(intents=discord.Intents.all())
+    started = False
+    exit_code = 1
+    notifier_started_at = time.monotonic()
+
+    @bot.event
+    async def on_ready():
+        nonlocal started, exit_code
+        if started:
+            return
+        started = True
+        try:
+            logger.info(
+                "Notifier Discord bot ready",
+                extra={
+                    "event": "discord_bot_ready",
+                    "bot_user": str(bot.user) if bot.user else None,
+                    "guild_count": len(bot.guilds),
+                },
+            )
+            logger.info(
+                "Starting notifier user loop",
+                extra={
+                    "event": "notifier_user_loop_started",
+                    "user_count": len(users),
+                    "mode": options.mode,
+                    "is_new_day": options.is_new_day,
+                    "catchup_start_date": options.start_date,
+                    "catchup_end_date": options.end_date,
+                },
+            )
+            successful_users = 0
+            failed_users = 0
+            total_new_releases = 0
+            anchor_succeeded_users = 0
+            anchor_failed_users = 0
+            for user in users:
+                succeeded, release_count, anchor_status = await process_user(user, options, bot)
+                if succeeded:
+                    successful_users += 1
+                else:
+                    failed_users += 1
+                if anchor_status == "succeeded":
+                    anchor_succeeded_users += 1
+                elif anchor_status == "failed":
+                    anchor_failed_users += 1
+                total_new_releases += release_count
+            logger.info(
+                "Finished notifier user loop",
+                extra={
+                    "event": "notifier_user_loop_finished",
+                    "user_count": len(users),
+                    "successful_user_count": successful_users,
+                    "failed_user_count": failed_users,
+                    "new_release_count": total_new_releases,
+                    "anchor_succeeded_user_count": anchor_succeeded_users,
+                    "anchor_failed_user_count": anchor_failed_users,
+                    "duration_seconds": round(time.monotonic() - notifier_started_at, 3),
+                },
+            )
+            exit_code = 1 if failed_users else 0
+        except Exception:
+            logger.exception("Notifier user loop failed", extra={"event": "notifier_user_loop_failed"})
+            exit_code = 1
+        finally:
+            await bot.close()
 
     try:
-        user = await bot.fetch_user(OWNER_DISCORD_ID)
-        channel = await user.create_dm()
-
-        async for message in channel.history(limit=100):
-            if message.author == bot.user:
-                await message.delete()
+        bot.run(token, log_handler=None)
     except Exception:
-        logger.exception("Error deleting Discord messages", extra={"event": "discord_delete_messages_failed"})
-        await bot.close()
+        logger.exception("Notifier failed", extra={"event": "notifier_failed"})
+        return 1
+    return exit_code
 
-@bot.event
-async def on_ready():
-    logger.info(
-        "Notifier Discord bot ready",
-        extra={
-            "event": "discord_bot_ready",
-            "bot_user": str(bot.user) if bot.user else None,
-            "guild_count": len(bot.guilds),
-        },
+
+def parse_date(value: str) -> date:
+    parts = value.split("-")
+    if len(parts) == 3:
+        if len(parts[0]) == 2:
+            value = f"{parts[2]}-{parts[0]}-{parts[1]}"
+        try:
+            parsed = date.fromisoformat(value)
+            if parsed.isoformat() == value:
+                return parsed
+        except ValueError:
+            pass
+    raise argparse.ArgumentTypeError("expected a valid YYYY-MM-DD or MM-DD-YYYY date")
+
+
+def create_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Notify all users of today's releases, or run an explicit catch-up.",
+        allow_abbrev=False,
     )
-    users = list(sql.iterate_users_one_by_one())
-    logger.info(
-        "Starting notifier user loop",
-        extra={
-            "event": "notifier_user_loop_started",
-            "user_count": len(users),
-            "mode": "catchup" if catchup else "daily",
-            "is_new_day": is_new_day,
-        },
+    commands = parser.add_subparsers(dest="command")
+    users = commands.add_parser("users", help="Inspect registered users", allow_abbrev=False)
+    user_commands = users.add_subparsers(dest="users_command", required=True)
+    listing = user_commands.add_parser("list", help="List users without credentials", allow_abbrev=False)
+    listing.add_argument("--format", choices=("table", "json", "ids"), default="table")
+
+    catchup = commands.add_parser(
+        "catchup",
+        help="Replay releases for explicitly selected users",
+        description="Replay an inclusive date range. Repeated runs can duplicate messages and playlist tracks.",
+        allow_abbrev=False,
     )
+    catchup.add_argument("start_date", type=parse_date)
+    catchup.add_argument("end_date", type=parse_date)
+    selection = catchup.add_mutually_exclusive_group(required=True)
+    selection.add_argument("--user", action="append", metavar="UUID", help="Select a UUID; repeat for multiple users")
+    selection.add_argument("--users-from-stdin", action="store_true", help="Read one UUID per line from stdin")
+    selection.add_argument("--all-users", action="store_true", help="Explicitly select every registered user")
+    return parser
 
-    successful_users = 0
-    failed_users = 0
-    total_new_releases = 0
-    anchor_succeeded_users = 0
-    anchor_failed_users = 0
-    for user in users:
-        succeeded, release_count, anchor_status = await process_user(user)
-        if succeeded:
-            successful_users += 1
-        else:
-            failed_users += 1
-        if anchor_status == "succeeded":
-            anchor_succeeded_users += 1
-        elif anchor_status == "failed":
-            anchor_failed_users += 1
-        total_new_releases += release_count
 
-    logger.info(
-        "Finished notifier user loop",
-        extra={
-            "event": "notifier_user_loop_finished",
-            "user_count": len(users),
-            "successful_user_count": successful_users,
-            "failed_user_count": failed_users,
-            "new_release_count": total_new_releases,
-            "anchor_succeeded_user_count": anchor_succeeded_users,
-            "anchor_failed_user_count": anchor_failed_users,
-            "duration_seconds": round(time.monotonic() - notifier_started_at, 3),
-        },
-    )
-    await bot.close()
+def print_users(output_format: str) -> None:
+    users = sql.list_user_summaries()
+    if output_format == "json":
+        print(json.dumps(users, ensure_ascii=False))
+    elif output_format == "ids":
+        for user in users:
+            print(user["user_uuid"])
+    else:
+        rows = [("UUID", "USERNAME", "DISCORD USERNAME")]
+        rows.extend(
+            tuple(str(user[field] or "").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+                  for field in ("user_uuid", "username", "discord_username"))
+            for user in users
+        )
+        widths = [max(len(row[index]) for row in rows) for index in range(3)]
+        for row in rows:
+            print("  ".join(value.ljust(width) for value, width in zip(row, widths)).rstrip())
 
-if __name__ == "__main__":
-    mode = "daily"
-    if len(sys.argv) > 1:
-        mode = sys.argv[1]
-            
-        if mode == "catchup":
-            catchup = True
-            
-            if len(sys.argv) == 4:
-                try:
-                    start_day = datetime.strptime(sys.argv[2], "%m-%d-%Y")
-                    end_day = datetime.strptime(sys.argv[3], "%m-%d-%Y")
-                    if end_day == datetime.now().date():
-                        end_day = end_day - timedelta(days=1)
-                except ValueError:
-                    logger.error("Invalid catchup date format", extra={"event": "notifier_cli_invalid_date_format"})
-                    sys.exit(1)
-                delta = end_day - start_day
-                catchup_days.append(start_day)
-                for i in range(delta.days + 1):
-                    day = start_day + timedelta(days=i)
-                    catchup_days.append(day)
-                catchup_days.append(end_day)
-            else:
-                logger.error("Invalid catchup arguments", extra={"event": "notifier_cli_invalid_arguments"})
-                sys.exit(1)
-        else:
-            logger.error("Invalid notifier mode", extra={"event": "notifier_cli_invalid_mode", "mode": mode})
-            sys.exit(1)
 
+def select_users(args: argparse.Namespace) -> list[sql.User]:
+    requested = None
+    if not args.all_users:
+        source = sys.stdin if args.users_from_stdin else args.user
+        requested = list(dict.fromkeys(value.strip() for value in source if value.strip()))
+        if not requested:
+            raise ValueError("no users selected; provide at least one UUID")
+
+    users = sorted(sql.get_all_users(read_only=True), key=lambda user: (user.username or "", user.user_UUID))
+    if requested is not None:
+        known = {user.user_UUID for user in users}
+        unknown = [user_uuid for user_uuid in requested if user_uuid not in known]
+        if unknown:
+            raise ValueError(f"unknown user UUID(s): {', '.join(unknown)}")
+        selected = set(requested)
+        users = [user for user in users if user.user_UUID in selected]
+    if not users:
+        raise ValueError("no users selected; the database contains no registered users")
+    return users
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = create_parser()
+    args = parser.parse_args(argv)
+    listing = args.command == "users"
+    configure_logging(service=os.getenv("SERVICE_NAME", "notifier"), stream=sys.stderr if listing else sys.stdout)
+
+    if listing:
+        try:
+            print_users(args.format)
+        except Exception:
+            logger.exception("Unable to list users", extra={"event": "notifier_user_list_failed"})
+            return 1
+        return 0
+
+    now = datetime.now(UTC).astimezone()
+    options = RunOptions(today=now.date(), is_new_day=now.hour < 12)
+    if args.command == "catchup":
+        if args.start_date > args.end_date:
+            parser.error("start date must be on or before end date")
+        if args.end_date > options.today:
+            parser.error("catch-up dates cannot be in the future")
+        options = RunOptions(options.today, options.is_new_day, args.start_date, args.end_date)
+        try:
+            users = select_users(args)
+        except ValueError as error:
+            parser.error(str(error))
+        except Exception:
+            logger.exception("Unable to load selected users", extra={"event": "notifier_user_selection_failed"})
+            return 1
+    else:
+        try:
+            sql.init_db()
+            users = sql.get_all_users()
+        except Exception:
+            logger.exception("Unable to load users", extra={"event": "notifier_users_load_failed"})
+            return 1
+
+    load_dotenv()
+    token = os.getenv("discord_token")
+    if not token:
+        logger.error("Discord token is not set", extra={"event": "notifier_missing_discord_token"})
+        return 1
     logger.info(
         "Notifier starting",
         extra={
             "event": "notifier_started",
-            "mode": "catchup" if catchup else "daily",
-            "is_new_day": is_new_day,
-            "catchup_start_date": catchup_days[0].strftime("%Y-%m-%d") if catchup_days else None,
-            "catchup_end_date": catchup_days[-1].strftime("%Y-%m-%d") if catchup_days else None,
+            "mode": options.mode,
+            "is_new_day": options.is_new_day,
+            "user_count": len(users),
+            "catchup_start_date": options.start_date,
+            "catchup_end_date": options.end_date,
         },
     )
+    if options.catchup:
+        logger.warning(
+            "Catch-up replays the entire range and can duplicate notifications and playlist tracks",
+            extra={"event": "notifier_catchup_replay"},
+        )
+    return run_notifier(users, options, token)
 
-    if DISCORD_TOKEN:
-        bot.run(DISCORD_TOKEN)
-    else:
-        logger.error("Discord token is not set", extra={"event": "notifier_missing_discord_token"})
-        sys.exit(1)
+
+if __name__ == "__main__":
+    sys.exit(main())

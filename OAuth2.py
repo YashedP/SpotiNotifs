@@ -4,10 +4,9 @@ import requests
 from authlib.integrations.requests_client import OAuth2Session
 from dotenv import load_dotenv
 
-from logging_config import configure_logging, get_logger
+from logging_config import get_logger
 
 load_dotenv()
-configure_logging()
 logger = get_logger(__name__)
 
 clientId = os.getenv("clientId")

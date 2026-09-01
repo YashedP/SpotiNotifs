@@ -5,7 +5,7 @@ import sys
 import traceback
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TextIO
 
 DEFAULT_RUN_ID = os.getenv("RUN_ID", str(uuid.uuid4()))
 RESERVED_RECORD_ATTRS = {
@@ -77,12 +77,12 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str, separators=(",", ":"))
 
 
-def configure_logging(service: str | None = None, run_id: str | None = None) -> str:
+def configure_logging(service: str | None = None, run_id: str | None = None, stream: TextIO | None = None) -> str:
     service_name = service or infer_service_name()
     current_run_id = run_id or DEFAULT_RUN_ID
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 
-    handler = logging.StreamHandler(sys.stdout)
+    handler = logging.StreamHandler(stream if stream is not None else sys.stdout)
     handler.setFormatter(JsonFormatter(service_name, current_run_id))
 
     root = logging.getLogger()
