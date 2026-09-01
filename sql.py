@@ -18,6 +18,7 @@ class User:
         username,
         discord_username,
         refresh_token,
+
         playlist_id=None,
         discord_id=None,
         user_items=None,
@@ -156,6 +157,7 @@ def get_all_users(*, read_only: bool = False) -> list[User]:
     except Exception:
         logger.exception("Error getting all users", extra={"event": "db_get_all_users_failed"})
         raise
+
 
 
 def list_user_summaries() -> list[dict[str, str | None]]:

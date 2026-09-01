@@ -209,7 +209,7 @@ def auth():
     if sql.get_user_by_username(username):
         logger.info("Signup username already exists", extra={"event": "web_signup_user_duplicate", "username": username})
         return f"User {username} already exists. Use Reconnect Spotify instead.", 409
-    
+
     user_UUID = str(uuid.uuid4())
     users[user_UUID] = {
         'flow': 'signup',
@@ -314,20 +314,20 @@ def callback():
     authCode = request.args.get('code')
     user_UUID = request.args.get('state')
     error = request.args.get('error')
-    
+
     if error:
         logger.info("OAuth callback returned an error", extra={"event": "web_oauth_callback_error", "oauth_error": error})
         return f"Error: {error}"
-    
+
     if user_UUID not in users:
         logger.info("OAuth callback state was not found", extra={"event": "web_oauth_callback_state_missing", "user_uuid": user_UUID})
         return "User not found"
-    
+
     user_data = users[user_UUID]
     del users[user_UUID]
     flow = user_data['flow']
     username = user_data['username']
-    
+
     response = OAuth2.get_access_token(authCode)
     refresh_token = response['refresh_token']
 
@@ -377,7 +377,7 @@ def callback():
 
     discord_username = user_data['discord_username']
     want_playlist = user_data['want_playlist']
-    
+
     user = sql.User(user_UUID, username, discord_username, refresh_token)
     if want_playlist:
         logger.info("Creating signup playlist", extra={"event": "web_signup_playlist_create_started", **user.log_context()})
@@ -385,7 +385,7 @@ def callback():
         playlist_id = asyncio.run(spotify.create_playlist(user))
         user.playlist_id = playlist_id
         logger.info("Created signup playlist", extra={"event": "web_signup_playlist_create_succeeded", **user.log_context()})
-    
+
     if sql.add_user(user):
         logger.info("OAuth callback completed", extra={"event": "web_oauth_callback_succeeded", **user.log_context()})
         return f"Successfully authenticated user: {username} with Discord: {discord_username}"

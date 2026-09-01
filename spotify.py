@@ -114,7 +114,7 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
         except aiohttp.ClientResponseError as e:
             if e.status == 429:
                 seconds_to_wait = max(0, int((e.headers or {}).get('Retry-After', '0')))
-                
+
                 logger.warning(
                     "Spotify request rate limited",
                     extra={
@@ -128,7 +128,7 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
                 )
                 if seconds_to_wait > 60:
                     raise RuntimeError(f"Spotify rate limit requires waiting {seconds_to_wait} seconds") from e
-                
+
                 await asyncio.sleep(seconds_to_wait)
             elif e.status == 403:
                 logger.error(
@@ -169,7 +169,7 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
                         **user_log_context(user),
                     },
                 )
-                raise 
+                raise
         attempts -= 1
     logger.error(
         "Spotify request exhausted retries",
@@ -203,14 +203,14 @@ def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] | None
                 response = requests.post(url, params=params, headers=headers, json=body)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
-    
+
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
             if e.response is not None and e.response.status_code == 429:
                 retry_after = e.response.headers.get('Retry-After')
                 seconds_to_wait = max(0, int(retry_after)) if retry_after else 0
-                
+
                 logger.warning(
                     "Spotify request rate limited",
                     extra={
@@ -225,7 +225,7 @@ def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] | None
                 )
                 if seconds_to_wait > 60:
                     raise RuntimeError(f"Spotify rate limit requires waiting {seconds_to_wait} seconds") from e
-                
+
                 time.sleep(seconds_to_wait)
             elif e.response is not None and e.response.status_code == 403:
                 logger.error(
@@ -281,7 +281,7 @@ def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] | None
 def get_all_artists(user: sql.User) -> list[dict]:
     artists = []
     next_cursor = None
-    
+
     while True:
         try:
             params = {
@@ -297,13 +297,13 @@ def get_all_artists(user: sql.User) -> list[dict]:
             raise
         if not next_cursor:
             break
-    
+
     logger.info("Fetched followed artists", extra={"event": "spotify_followed_artists_succeeded", "artist_count": len(artists), **user_log_context(user)})
     return artists
 
 async def get_all_albums(user: sql.User, artist_id: str, session: aiohttp.ClientSession, semaphore: asyncio.Semaphore) -> list[dict[str, Any]]:
     albums = []
-    
+
     next_url = None
     while True:
         if next_url:
@@ -316,14 +316,14 @@ async def get_all_albums(user: sql.User, artist_id: str, session: aiohttp.Client
                     "include_groups": "album,single,appears_on",
                     "market": "US",
                 })
-        
+
         for item in response['items']:
             if item['album_type'] == "compilation":
                 continue
             albums.append(item)
-        
+
         next_url = response['next']
-        
+
         if not next_url:
             break
 
@@ -338,7 +338,7 @@ async def recent_20_for_each_category_album(user: sql.User, artist_id: str, sess
                 "include_groups": category,
                 "market": "US"
             })
-    
+
         albums.extend(response['items'])
     return albums
 
@@ -346,7 +346,7 @@ async def check_playlist_exists(user: sql.User) -> bool:
     items = []
     next = None
     link = ME_PLAYLISTS_URL
-    
+
     while True:
         response = spotify_request_sync(user, link, params={"limit": "50"})
         items.extend(response['items'])
@@ -354,7 +354,7 @@ async def check_playlist_exists(user: sql.User) -> bool:
         link = next
         if not next:
             break
-    
+
     for item in items:
         if item['id'] == user.playlist_id:
             return True
@@ -364,13 +364,13 @@ async def create_playlist(user: sql.User) -> str:
     logger.info("Creating Spotify playlist", extra={"event": "spotify_playlist_create_started", **user_log_context(user)})
     response = spotify_request_sync(user, ME_URL)
     id = response['id']
-    
+
     body = {
         "name": "SpotiNotif",
         "description": "New Releases from your followed artists",
         "public": True
     }
-    
+
     response = spotify_request_sync(user, CREATE_PLAYLIST_URL.format(user_id=id), body=body, method="POST")
     playlist_id = response['id']
     logger.info("Created Spotify playlist", extra={"event": "spotify_playlist_create_succeeded", "playlist_id": playlist_id, **user_log_context(user)})
@@ -393,7 +393,7 @@ async def add_to_playlist(user: sql.User, new_releases) -> None:
             for song in songs.values():
                 link = song['id']
                 response = spotify_request_sync(user, ALBUM_URL.format(album_id=link))
-    
+
                 items = response['tracks']['items']
                 next_url = response['tracks']['next']
                 while next_url:
@@ -401,7 +401,7 @@ async def add_to_playlist(user: sql.User, new_releases) -> None:
                     items.extend(response['items'])
                     next_url = response['next']
                 uris.extend([item['uri'] for item in items])
-    
+
         for offset in range(0, len(uris), BREAKPOINT):
             body = {"uris": uris[offset : offset + BREAKPOINT]}
             spotify_request_sync(user, ADD_TO_PLAYLIST_URL.format(playlist_id=user.playlist_id), body=body, method="POST")
@@ -420,25 +420,25 @@ async def new_releases(user: sql.User, options: RunOptions) -> tuple[str, int, a
     except Exception:
         logger.exception("Spotify token refresh failed", extra={"event": "spotify_refresh_token_failed", **user_log_context(user)})
         raise
-    
+
     access_token = token_info['access_token']
     user.access_token = access_token
     logger.info("Spotify token refreshed for user", extra={"event": "spotify_refresh_token_succeeded", **user_log_context(user)})
-    
+
     try:
         artists = get_all_artists(user)
     except Exception:
         logger.exception("Error requesting artists", extra={"event": "spotify_artists_request_failed", **user_log_context(user)})
         raise
-    
+
     artists_ids = [(artist['id'], artist['name']) for artist in artists]
     logger.info("Starting artist processing", extra={"event": "artist_processing_started", "artist_count": len(artists_ids), **user_log_context(user)})
-    
+
     new_releases = {}
     songs_already_added = user.get_items()
     if not options.catchup and options.is_new_day:
         user.reset_items()
-    
+
     semaphore = asyncio.Semaphore(1)
     async with aiohttp.ClientSession() as session:
         async def process_single_artist(artist_id, artist_name):
@@ -448,7 +448,7 @@ async def new_releases(user: sql.User, options: RunOptions) -> tuple[str, int, a
                 albums = await get_all_albums(user, artist_id, session, semaphore)
 
             new_songs = {}
-            
+
             for album in albums:
                 album_id = album.get('id')
                 if not album_id or not options.includes(album.get('release_date')):
@@ -458,9 +458,9 @@ async def new_releases(user: sql.User, options: RunOptions) -> tuple[str, int, a
                 elif album_id not in songs_already_added:
                     user.add_item(album_id)
                     new_songs[album_id] = album
-                            
+
             return artist_name, new_songs if new_songs else None
-        
+
         tasks = [process_single_artist(artist_id, artist_name) for artist_id, artist_name in artists_ids]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -482,7 +482,7 @@ async def new_releases(user: sql.User, options: RunOptions) -> tuple[str, int, a
             raise RuntimeError(f"Release scan incomplete: {failed_artists} artist(s) failed")
         if not options.catchup:
             sql.update_user_items(user)
-    
+
     release_count = sum(len(songs) for songs in new_releases.values())
     logger.info(
         "Finished release scan",
@@ -507,7 +507,7 @@ async def new_releases(user: sql.User, options: RunOptions) -> tuple[str, int, a
             for song in songs.values():
                 message += f"* [{song['name']}]({song['external_urls']['spotify']})\n"
             message += "\n"
-        
+
         await add_to_playlist(user, new_releases)
     else:
         if options.catchup:
@@ -678,7 +678,7 @@ async def send_message(user: sql.User, message: str, bot: discord.Client):
         "Discord message send started",
         extra={"event": "discord_message_send_started", "message_part_count": len(messages), **user_log_context(user)},
     )
-    
+
     if user.discord_id:
         try:
             discord_user = await bot.fetch_user(user.discord_id)
@@ -722,13 +722,13 @@ def split_long_message(message: str, max_length: int = 1900) -> list[str]:
     """Split a message that's too long by looking for \n delimiters"""
     if len(message) <= max_length:
         return [message]
-    
+
     messages = []
     current_message = ""
-    
+
     # Split by lines
     lines = message.split('\n')
-    
+
     for line in lines:
         # Check if adding this line would exceed the limit
         if len(current_message + line + '\n') > max_length:
@@ -741,11 +741,11 @@ def split_long_message(message: str, max_length: int = 1900) -> list[str]:
                 current_message = ""
         else:
             current_message += line + '\n'
-    
+
     # Add the last message if it has content
     if current_message.strip():
         messages.append(current_message.rstrip())
-    
+
     return messages
 
 async def error_message(error: Exception, bot: discord.Client):
