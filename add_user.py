@@ -10,10 +10,12 @@ import spotify
 import sql
 from anchor_credentials import CredentialConfigurationError, encrypt_api_key
 from logging_config import configure_logging, get_logger
+from telemetry import instrument_flask
 
 app = Flask(__name__)
 load_dotenv()
 configure_logging(service="server")
+instrument_flask(app)
 logger = get_logger(__name__)
 
 users = {}

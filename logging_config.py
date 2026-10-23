@@ -7,6 +7,9 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, TextIO
 
+from opentelemetry import trace
+from telemetry import configure_tracing
+
 DEFAULT_RUN_ID = os.getenv("RUN_ID", str(uuid.uuid4()))
 RESERVED_RECORD_ATTRS = {
     "args",
@@ -61,6 +64,12 @@ class JsonFormatter(logging.Formatter):
             "run_id": getattr(record, "run_id", self.run_id),
         }
 
+        span_context = trace.get_current_span().get_span_context()
+        if span_context.is_valid:
+            payload["trace_id"] = format(span_context.trace_id, "032x")
+            payload["span_id"] = format(span_context.span_id, "016x")
+        payload["service_name"] = os.getenv("OTEL_SERVICE_NAME", f"spotinotifs-{self.service}")
+
         for key, value in record.__dict__.items():
             if key in RESERVED_RECORD_ATTRS or key in payload or key.startswith("_"):
                 continue
@@ -79,6 +88,7 @@ class JsonFormatter(logging.Formatter):
 
 def configure_logging(service: str | None = None, run_id: str | None = None, stream: TextIO | None = None) -> str:
     service_name = service or infer_service_name()
+    configure_tracing(service_name)
     current_run_id = run_id or DEFAULT_RUN_ID
     log_level = os.getenv("LOG_LEVEL", "INFO").upper()
 

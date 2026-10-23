@@ -1,3 +1,4 @@
+from telemetry import traced
 import os
 
 import requests
@@ -25,6 +26,7 @@ def create_authorization_url(state: str) -> str:
     logger.info("Created Spotify authorization URL", extra={"event": "oauth_authorization_url_succeeded", "state": state})
     return authorization_url
 
+@traced("spotify.get_access_token")
 def get_access_token(authCode: str) -> dict[str, str]:
     try:
         logger.info("Fetching Spotify access token", extra={"event": "oauth_access_token_started"})
@@ -35,6 +37,7 @@ def get_access_token(authCode: str) -> dict[str, str]:
         logger.exception("Failed to fetch Spotify access token", extra={"event": "oauth_access_token_failed"})
         raise
 
+@traced("spotify.refresh_access_token")
 def refresh_access_token(refresh_token: str) -> dict[str, str]:
     try:
         logger.info("Refreshing Spotify access token", extra={"event": "oauth_refresh_token_started"})
@@ -46,6 +49,7 @@ def refresh_access_token(refresh_token: str) -> dict[str, str]:
         raise
 
 
+@traced("spotify.get_spotify_user_id")
 def get_spotify_user_id(access_token: str) -> str:
     try:
         response = requests.get(

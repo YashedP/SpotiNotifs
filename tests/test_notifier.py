@@ -238,7 +238,7 @@ class CliTest(NotifierFixture):
 
     def test_listing_from_real_process_pipes_into_selection(self):
         project = Path(spotify.__file__).parent
-        for name in ("spotify.py", "sql.py", "OAuth2.py", "logging_config.py", "anchor.py", "anchor_credentials.py"):
+        for name in ("spotify.py", "sql.py", "OAuth2.py", "logging_config.py", "telemetry.py", "anchor.py", "anchor_credentials.py"):
             shutil.copyfile(project / name, Path(self.temp.name) / name)
         result = subprocess.run(
             [sys.executable, "spotify.py", "users", "list", "--format", "ids"],

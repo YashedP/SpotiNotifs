@@ -248,3 +248,7 @@ make status
 make logs
 make restart
 ```
+
+## Observability
+
+See [OBSERVABILITY.md](OBSERVABILITY.md) for deployment, notifier schedule updates, verification, and rollback.

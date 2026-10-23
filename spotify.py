@@ -23,6 +23,9 @@ from anchor_credentials import (
     decrypt_api_key,
 )
 from logging_config import configure_logging, get_logger
+from telemetry import traced
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
 
 logger = get_logger(__name__)
 
@@ -90,6 +93,7 @@ def endpoint_name(url: str) -> str:
         return "spotify_playlist"
     return "spotify_api"
 
+@traced("spotify_request")
 async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSession, params: dict[str, str] | None = None) -> dict[str, Any]:
     params = params or {}
     headers = {"Authorization": f"Bearer {user.access_token}"}
@@ -177,6 +181,7 @@ async def spotify_request(user: sql.User, url: str, session: aiohttp.ClientSessi
     )
     raise RuntimeError("Spotify request exhausted retries")
 
+@traced("spotify_request_sync")
 def spotify_request_sync(user: sql.User, url: str, params: dict[str, str] | None = None, body: dict[str, Any] | None = None, method: str = "GET") -> dict[str, Any]:
     params = params or {}
     body = body or {}
@@ -589,6 +594,7 @@ def compact_anchor_summary(release_count: int, artist_count: int, rows: list[str
     return result[:anchor.MAX_ANCHOR_MESSAGE_CHARACTERS]
 
 
+@traced("send_anchor_notification")
 async def send_anchor_notification(user: sql.User, notification: anchor.AnchorNotification) -> str:
     if not user.anchor_api_key_ciphertext:
         logger.info(
@@ -632,6 +638,7 @@ async def send_anchor_notification(user: sql.User, notification: anchor.AnchorNo
     return "failed"
 
 
+@traced("process_user")
 async def process_user(user: sql.User, options: RunOptions, bot: discord.Client) -> tuple[bool, int, str]:
     user_started_at = time.monotonic()
     logger.info("User processing started", extra={"event": "user_processing_started", **user_log_context(user)})
@@ -669,8 +676,10 @@ async def process_user(user: sql.User, options: RunOptions, bot: discord.Client)
             },
         )
         await error_message(Exception(f"Error processing user: {user.safe_str()}"), bot)
+        trace.get_current_span().set_status(Status(StatusCode.ERROR, "user processing failed"))
         return False, 0, "not_attempted"
 
+@traced("send_message")
 async def send_message(user: sql.User, message: str, bot: discord.Client):
     # Split message if it's too long
     messages = split_long_message(message)
