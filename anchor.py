@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 
 import aiohttp
+from telemetry import traced, inject_trace_context
 
 DEFAULT_ANCHOR_API_BASE_URL = "https://anchor-api.yashjani.com"
 MAX_ANCHOR_MESSAGE_CHARACTERS = 1024
@@ -54,6 +55,7 @@ def notification_payload(user_uuid: str, notification: AnchorNotification) -> di
     return payload
 
 
+@traced("anchor.create_notification")
 async def create_notification(
     user_uuid: str,
     api_key: str,
@@ -69,6 +71,7 @@ async def create_notification(
         "Content-Type": "application/json",
         "User-Agent": "SpotiNotifs/0.1",
     }
+    inject_trace_context(headers)
     payload = notification_payload(user_uuid, notification)
     owns_session = session is None
     if session is None:
